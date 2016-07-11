@@ -130,15 +130,13 @@ by using a datastore cursor, eventally iterating over the entire dataset.
 Your job functions will be called at the appropriate points to perform whatever work
 they need to.
 
-## Future Plans
-The basic mapper processing works and needs some tidy up / testing for robustness which
-I'll be doing by using it within a real-world app with over 6 million entities to work
-against.
-
-Although I have no plans to build in any shuffle or reduce steps, I do want to provide
+## Output
+Although I have no plans to build in any shuffle or reduce steps, I wanted to provide
 an easy way to write data to cloud storage (a primary use-case will be exporting data
-in JSON format for BigQuery). Cloud Storage provides the sbility to write each file in
-chunks and then combine them which I think will simplyfy the file-writing operation
-substantially (probably not available when the original libraries were written). Each
-slice can write to it's own file and those slices then rolled up into a single shard 
-file and possibly, the shard files then rolled up into a single job file.
+in JSON format for BigQuery). Cloud Storage provides the ability to write each file in
+chunks and then combine them which simplifies the file-writing operation substantially
+(probably not available when the original libraries were written). Each slice can write
+to it's own file, overwriting on retry, and those slices can then be quickly rolled up
+into a single shard file and then into a single namespace file (finally to a single job
+file). This is working but needs to be optimized and made more robust (e.g. to cope with
+the limits on how many files can be combined). 
