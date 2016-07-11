@@ -51,7 +51,7 @@ func init() {
 // NewQuery created a new Query
 func NewQuery(kind string) *Query {
 	return &Query{
-		kind: kind,
+		kind:      kind,
 	}
 }
 

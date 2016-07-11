@@ -1,11 +1,7 @@
 package mapper
 
 import (
-	"fmt"
 	"net/http"
-	"strconv"
-
-	"google.golang.org/appengine"
 )
 
 type (
@@ -25,20 +21,9 @@ func (a apiJobs) Get(w http.ResponseWriter, r *http.Request, id string) (int, in
 */
 
 func (a apiJobs) Post(w http.ResponseWriter, r *http.Request, id string) (int, interface{}, error) {
-	values := r.URL.Query()
-	name := values.Get("type")
-	job, _ := CreateJobInstance(name)
-	if job == nil {
-		return http.StatusBadRequest, nil, fmt.Errorf("job type not found")
+	if err := StartJob(r); err != nil {
+		return http.StatusBadRequest, nil, err
 	}
-
-	shards, _ := strconv.Atoi(values.Get("shards"))
-	queue := values.Get("queue")
-	query, _ := job.Query(r)
-
-	c := appengine.NewContext(r)
-
-	StartJob(c, job, query, queue, shards)
 	data := map[string]interface{}{
 		"started": true,
 	}

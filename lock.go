@@ -8,13 +8,12 @@ the logic can be easily re-used across different entity types.
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
-	"strings"
 	"time"
 
 	"math/rand"
 	"net/http"
+	"net/url"
 
 	"golang.org/x/net/context"
 	"google.golang.org/appengine"
@@ -24,32 +23,32 @@ import (
 )
 
 type (
-	// Lock is used to protect sequential tasks from being re-executed due to the
+	// lock is used to protect sequential tasks from being re-executed due to the
 	// at-least-once semantics of the task queue. It will detect situations where
 	// a task has died *without* clearing the lock so that it can timeout without
 	// blocking for an extended period of time or causing a deadlock.
 	//
-	// This Lock struct should be embedded within the entity and the Sequence added
+	// This lock struct should be embedded within the entity and the Sequence added
 	// to the task header
-	Lock struct {
+	lock struct {
 		// Timestamp is the time that this lock was written
-		Timestamp time.Time `datastore:"ts"`
+		Timestamp time.Time `datastore:"lock_timestamp"`
 
 		// Request is the request id that obtained the current lock
-		RequestID string `datastore:"req"`
+		RequestID string `datastore:"lock_request"`
 
 		// Sequence is the task sequence number
-		Sequence int `datastore:"seq"`
+		Sequence int `datastore:"lock_seq"`
 
 		// Retries is the number of retries that have been attempted
-		Retries int `datastore:"retries"`
+		Retries int `datastore:"lock_retries"`
 	}
 
 	// lockable is the interface that lockable entities should implement
-	// they will do this automatically simply by embedding Lock in the struct
-	// This is used to ensure than entities we deal with have a Lock field
+	// they will do this automatically simply by embedding lock in the struct
+	// This is used to ensure than entities we deal with have a lock field
 	lockable interface {
-		lock() *Lock
+		getlock() *lock
 	}
 
 	// LockError is a custom error that includes the recommended http response
@@ -97,7 +96,7 @@ func (e LockError) Error() string {
 	return fmt.Sprintf("%s", e.text)
 }
 
-func (lock *Lock) lock() *Lock {
+func (lock *lock) getlock() *lock {
 	return lock
 }
 
@@ -109,53 +108,47 @@ func ParseLock(r *http.Request) (id string, seq int, queue string, err error) {
 	return
 }
 
-// ScheduleLock schedules a task with lock
-func ScheduleLock(c context.Context, key *datastore.Key, entity lockable, task *taskqueue.Task, queueName string) (*taskqueue.Task, error) {
-	requestID := appengine.RequestID(c)
-
-	lock := entity.lock()
+func NewLockTask(key *datastore.Key, entity lockable, path string, params url.Values) *taskqueue.Task {
+	lock := entity.getlock()
 	lock.Timestamp = getTime()
 	lock.RequestID = ""
 	lock.Retries = 0
 	lock.Sequence++
 
-	// set unique but predictable task name based on entity type, id/name and sequence
-	entityType := reflect.TypeOf(entity).Elem()
-	entityName := strings.Replace(entityType.String(), ".", "-", 1)
+	// set task headers so that we can retrieve the matching entity
+	// and check that the executing task is the one we're expecting
+	var id string
 	if key.IntID() == 0 {
-		task.Name = fmt.Sprintf(config.TaskPrefix+"%s-%s-%d", entityName, key.StringID(), lock.Sequence)
-		task.Header.Set("X-Mapper-ID", key.StringID())
+		id = key.StringID()
 	} else {
-		task.Name = fmt.Sprintf(config.TaskPrefix+"%s-%d-%d", entityName, key.IntID(), lock.Sequence)
-		task.Header.Set("X-Mapper-ID", strconv.FormatInt(key.IntID(), 10))
+		id = strconv.FormatInt(key.IntID(), 10)
 	}
-	// we could get this from the name, but it's nice to be explicit
+
+	task := taskqueue.NewPOSTTask(path, params)
+	task.Header.Set("X-Mapper-ID", id)
 	task.Header.Set("X-Mapper-Sequence", strconv.Itoa(lock.Sequence))
 
-	log.Debugf(c, "Schedule %s %d %s %s from %s", key.String(), lock.Sequence, task.Name, queueName, requestID)
+	return task
+}
 
-	// this is tricky because we want to write our entity and also
-	// schedule a task which is normally easy to do transacitonally ...
-	// except that isn't allowed when using named tasks so instead
-	// we write the entity and fail the transaction if the task
-	// scheduling part fails which should semantically be the same
+// ScheduleLock schedules a task with lock
+func ScheduleLock(c context.Context, key *datastore.Key, entity lockable, path string, params url.Values, queue string) (*taskqueue.Task, error) {
+	task := NewLockTask(key, entity, path, params)
+
+	// we write the datastore entity and schedule the task within a
+	// transaction which guarantees that both happen and the entity
+	// will be committed to the datastore when the task executes but
+	// the task won't be scheduled if our entity update loses out
 	err := storage.RunInTransaction(c, func(tc context.Context) error {
 		if _, err := storage.Put(tc, key, entity); err != nil {
-			log.Errorf(c, "putting entity %s", err.Error())
+			// returning the err will cause a transaction attempt
+			// add a random delay to avoid contention
+			randomDelay()
 			return err
 		}
-		// transactional enqueue requires tasks with no name so we
-		// need to use the context from *outside* of the transaction
-		_, err := taskqueue.Add(c, task, queueName)
-		if err == taskqueue.ErrTaskAlreadyAdded {
-			// duplicate tasks are ok, just ignore them
-			log.Warningf(c, "duplicate task")
-			return nil
-		}
-		if err != nil {
-			log.Errorf(c, "scheduling task %s", err.Error())
-			// for actual errors we need to retry but add a
-			// random delay to avoid contention.
+		if _, err := taskqueue.Add(tc, task, queue); err != nil {
+			// returning the err will cause a transaction attempt
+			// add a random delay to avoid contention
 			randomDelay()
 			return err
 		}
@@ -166,45 +159,33 @@ func ScheduleLock(c context.Context, key *datastore.Key, entity lockable, task *
 }
 
 // GetLock attempts to get and lock an entity with the given identifier
-// If successful it will write a new Lock entity to the datastore
+// If successful it will write a new lock entity to the datastore
 // and return nil, otherwise it will return an error to indicate
 // the reason for failure.
 func GetLock(c context.Context, key *datastore.Key, entity lockable, sequence int) error {
 	requestID := appengine.RequestID(c)
 	success := false
 
-	log.Debugf(c, "GetLock %s %d from %s", key.String(), sequence, requestID)
-
 	// we need to run in a transaction for consistency guarantees
 	// in case two tasks start at the exact same moment and each
 	// of them sees no lock in place
 	err := storage.RunInTransaction(c, func(tc context.Context) error {
-		err := storage.Get(tc, key, entity)
-		if err == datastore.ErrNoSuchEntity {
-			// if the entity isn't there, something is wrong - it needs to
-			// be scheduled first - the only likely explanations are that the
-			// datastore entity has been deleted or the request hasn't really
-			// come from the task queue. This shouldn't really happen
-			// TODO: warn / panic / return error to drop task ...
-			log.Errorf(c, "entity not found")
-			return nil
-		}
-		if err != nil {
-			log.Errorf(c, "getting entity %s", err.Error())
-			// for actual datastore errors we need to retry but add a
-			// random delay to avoid contention.
+		// reset flag here in case of transaction retries
+		success = false
+
+		if err := storage.Get(tc, key, entity); err != nil {
+			// returning the err will cause a transaction attempt
+			// add a random delay to avoid contention
 			randomDelay()
 			return err
 		}
-
-		// is the lock available?
-		lock := entity.lock()
+		// we got the entity successfully, check if it's locked
+		// and try to claim the lease if it isn't
+		lock := entity.getlock()
 		if lock.RequestID == "" && lock.Sequence == sequence {
-			log.Debugf(c, "lock available")
 			lock.Timestamp = getTime()
 			lock.RequestID = requestID
 			if _, err := storage.Put(tc, key, entity); err != nil {
-				log.Errorf(c, "putting entity %s", err.Error())
 				return err
 			}
 			success = true
@@ -212,13 +193,13 @@ func GetLock(c context.Context, key *datastore.Key, entity lockable, sequence in
 		}
 
 		// lock already exists, return nil because there is no point doing
-		// any more retries but we'll need to figure out if we can take it
+		// any more retries but we'll need to figure out if we can claim it
 		return nil
 	}, &datastore.TransactionOptions{XG: false, Attempts: attempts})
 
-	// if there was any error then we failed to get the lock but don't
-	// really know why - returning an error indicates to the caller that
-	// they should mark the task as failed so it will be re-attempted
+	// if there was any error then we failed to get the lock due to datastore
+	// errors. Returning an error indicates to the caller that they should mark
+	// the task as failed so it will be re-attempted
 	if err != nil {
 		log.Errorf(c, "lock failed %s", err.Error())
 		return ErrLockFailed
@@ -231,8 +212,8 @@ func GetLock(c context.Context, key *datastore.Key, entity lockable, sequence in
 
 	// If there wasn't any error but we weren't successful then a lock is
 	// already in place. We're most likely here because a duplicate task has
-	// been scheduled (at least once delivery) so we need to examine the lock
-	lock := entity.lock()
+	// been scheduled or executed so we need to examine the lock itself
+	lock := entity.getlock()
 	log.Debugf(c, "lock %v %d %d %s", lock.Timestamp, lock.Sequence, lock.Retries, lock.RequestID)
 
 	// if the lock sequence is already past this task so it should be dropped
@@ -273,7 +254,7 @@ func ClearLock(c context.Context, key *datastore.Key, entity lockable, retry boo
 			log.Errorf(c, "get entity failed %s", err.Error())
 			return err
 		}
-		lock := entity.lock()
+		lock := entity.getlock()
 		lock.Timestamp = getTime()
 		lock.RequestID = ""
 		if retry {
@@ -296,7 +277,7 @@ func overwriteLock(c context.Context, key *datastore.Key, entity lockable, reque
 			log.Errorf(c, "get entity failed %s", err.Error())
 			return err
 		}
-		lock := entity.lock()
+		lock := entity.getlock()
 		lock.Timestamp = getTime()
 		lock.RequestID = requestID
 		if _, err := storage.Put(tc, key, entity); err != nil {
@@ -332,4 +313,13 @@ func previousRequestEnded(c context.Context, requestID string) bool {
 func randomDelay() {
 	d := time.Duration(rand.Int63n(4)+1) * time.Second
 	time.Sleep(d)
+}
+
+/* datastore */
+func (l *lock) Load(props []datastore.Property) error {
+	return datastore.LoadStruct(l, props)
+}
+
+func (l *lock) Save() ([]datastore.Property, error) {
+	return datastore.SaveStruct(l)
 }

@@ -8,7 +8,7 @@ It is alpha status while I develop the API and should not be used in production.
 ## Why only the mapper?
 Technology moves on and Google's cloud platform now provides other services that handle
 many of the things that the Map-Reduce framework was once the solution to. If you need 
-any Analytics and Reporting functionality, for instamce, you would now likely look at 
+any Analytics and Reporting functionality, for instance, you would now likely look at 
 using [BigQuery](https://cloud.google.com/bigquery/) instead of trying to create your
 own via Map-Reduce.
 
@@ -16,13 +16,13 @@ But the mapper is still needed: it's used to write backups of your Datastore dat
 Cloud storage (which is also the way you export your Datastore data into BigQuery). Many
 times it's necessary to iterate over all the data in your system when you need to update
 the schema or perform some other operational processing and the mapper provides a great
-approach for doing that.
+approach for doing that by enabling easy splitting and distribution of the workload.
 
 ## Why a Go version?
 So why not just continue to use the existing Python or Java implementations?
 
 They both continue to work as well as they always have but there were a few specific
-reasons that I wanted a pure Go-based solution:
+reasons that I wanted a solution using Go:
 
 ### Performance
 The Python version tends to be rather slow and can only process a small number of
@@ -30,22 +30,24 @@ entities in a batch without the instance memory going over the limit and causing
 and retries. The Java runtime is faster but also requires larger instances sizes just
 to execute before you even start processing anything.
 
-I like that a Go version can run (and run _fast_) on the smallest F1/B1 micro-instance
+I like that a Go version can run (and run _fast_) event on the smallest F1/B1 micro-instance
 consuming just 10Mb of RAM but able to process thousands of entities per second.
 
 ### Runtime Cost
 The slow performance and larger instance size requirementss for Python and Java both 
-result in higher cost which I'd prefer to avoid if possible. Each platform also tends
+result in higher operational costs which I'd prefer to avoid. Each platform also tends
 to have it's own memcache implementation to improve Datastore performance and bypassing
-the already populated cache can also add to the cost due to unecessary datastore
+any already-populated cache can also add to the cost due to unecessary datastore
 operations. 
 
 ### Development Cost
 I already have my datastore models developed as part of my Go app and don't want to have
 to re-develop and maintain a Python or Java version as well (and sometimes it's not 
-straightforward to switch between them). The cost of including a whole other language
-in your solution goes beyond just the code - it's the development machine maintenance
-and upgrading, IDE tooling and skills.
+straightforward to switch between them with different serialization methods etc...).
+The cost of including a whole other language in your solution goes beyond just the code
+- it's the development machine maintenance and all the upgrading, IDE tooling and skills
+maintenance that go along with it before you get to things like the mental context
+switching.
 
 ## Performance
 Initial testing shows it can process over 100k datastore entities in about a minute
@@ -53,7 +55,7 @@ using a single F1 micro instance. This works out to about 1.6k entities per seco
 
 Of course the work can often be divided into smaller pieces so it's very likely that
 increasing the number of shards so that requests are run on multiple instances will
-result in much higher performance / faster throughput.
+result in even greater performance and faster throughput.
 
 ## Implementation
 I originally started with the idea of strictly following the existing implementations
@@ -77,9 +79,10 @@ namespaces with each shard iterating over a range of namespaces and data within 
 
 If you are using the namespacing for multi-tenancy and each tenant has very different
 volumes of data it can easily result in one shard becoming completely overloaded which
-completey destroys the benefit of sharding and distribution.
+completey destroys the benefit of sharding and distribution which is why the mapper
+framework is being used in the first place.
 
-Instead, this framework creates a producer task to iterate over the namespaces and do
+This framework instead creates a producer task to iterate over the namespaces and do
 the shard splitting on each of them, assigning separate shards within each namespace
 to ensure the work can be split evenly but with some heuristics so that the number of
 shards used for a namespace that doesn't contain much data is automatically reduced.

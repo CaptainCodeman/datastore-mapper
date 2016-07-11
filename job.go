@@ -1,7 +1,10 @@
 package mapper
 
 import (
+	"fmt"
+	"io"
 	"strconv"
+	"strings"
 
 	"hash/adler32"
 	"net/http"
@@ -9,7 +12,6 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
-	"google.golang.org/appengine/taskqueue"
 )
 
 type (
@@ -24,12 +26,12 @@ type (
 
 	JobSingle interface {
 		// Next will be called to process each item
-		Single(c context.Context, counters Counters, key *datastore.Key) error
+		Single(c context.Context, w io.Writer, counters Counters, key *datastore.Key) error
 	}
 
 	JobBatched interface {
 		// Next will be called to process each batch
-		Batch(c context.Context, counters Counters, keys []*datastore.Key) error
+		Batch(c context.Context, w io.Writer, counters Counters, keys []*datastore.Key) error
 	}
 
 	// JobLifecycle is the interface that any mapper job struct can implement to
@@ -56,26 +58,47 @@ type (
 
 // StartJob launches a job on the given queue. It is not executed immediately but
 // scheduled to run as a task which performs splitting of the input reader based
-// on the number of shards. Prefix should be a unique identifier, typically the
-// value of the X-Appengine-Request-Id-Hash request header. All tasks will execute
-// on the queue specified or the default set in config (or the default queue if
-// that is also empty).
-//
-// Ideally we'd pass request into here instead but we kind of need it to be context
-// for testing purposes so ...
-func StartJob(c context.Context, job Job, query *Query, queue string, shards int) error {
-	requestID := appengine.RequestID(c)
-	prefix := strconv.FormatUint(uint64(adler32.Checksum([]byte(requestID))), 16)
+// on the number of shards.
+func StartJob(r *http.Request) error {
+	values := r.URL.Query()
+	name := values.Get("name")
+	job, err := CreateJobInstance(name)
+	if err != nil {
+		return err
+	}
 
-	ns := new(namespaceIterator)
-	ns.Active = true
-	ns.Job = job
-	ns.Query = query
+	shards, err := strconv.Atoi(values.Get("shards"))
+	if shards == 0 || err != nil {
+		shards = config.ShardCount
+	}
+	queue := values.Get("queue")
+	if queue == "" {
+		queue = config.Queue
+	}
+	bucket := values.Get("bucket")
 
-	key := datastore.NewKey(c, config.DatastorePrefix+namespaceIteratorKind, prefix, 0, nil)
+	query, _ := job.Query(r)
 
-	t := taskqueue.NewPOSTTask(config.BasePath+namespaceIteratorURL, nil)
-	if _, err := ScheduleLock(c, key, ns, t, queue); err != nil {
+	c := appengine.NewContext(r)
+	requestHash := r.Header.Get("X-Appengine-Request-Id-Hash")
+	if requestHash == "" {
+		// this should only happen when testing, we just need a short hash
+		requestID := appengine.RequestID(c)
+		requestHash = strconv.FormatUint(uint64(adler32.Checksum([]byte(requestID))), 16)
+	}
+
+	id := fmt.Sprintf("%s-%s", strings.Replace(name, ".", "", 1), requestHash)
+	state := &jobState{
+		Job:       job,
+		Query:     query,
+		Bucket:    bucket,
+		Shards:    shards,
+		Iterating: true,
+	}
+	state.common.start()
+
+	k := datastore.NewKey(c, config.DatastorePrefix+jobKind, id, 0, nil)
+	if _, err := ScheduleLock(c, k, state, config.BasePath+jobURL, nil, queue); err != nil {
 		return err
 	}
 	return nil

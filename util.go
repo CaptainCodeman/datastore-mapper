@@ -1,7 +1,6 @@
 package mapper
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -19,14 +18,3 @@ var (
 func getTimeDefault() time.Time {
 	return time.Now().UTC()
 }
-
-// getDescendingKey returns a key name lexically ordered by time descending.
-// This lets us have a key name for use with Datastore entities which returns
-// rows in time descending order when it is scanned in lexically ascending order,
-// allowing us to bypass index building for descending indexes.
-func getDescendingKey() string {
-	nowDescending := futureTime - getTime().Unix()
-	return fmt.Sprintf("%012d", nowDescending)
-}
-
-// TODO: set force_writes option
