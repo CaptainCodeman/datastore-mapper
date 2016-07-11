@@ -250,22 +250,29 @@ func GetLock(c context.Context, key *datastore.Key, entity lockable, sequence in
 func ClearLock(c context.Context, key *datastore.Key, entity lockable, retry bool) error {
 	log.Debugf(c, "ClearLock %s %t", key.String(), retry)
 	err := storage.RunInTransaction(c, func(tc context.Context) error {
-		if err := storage.Get(tc, key, entity); err != nil {
+		val := new(datastore.PropertyList)
+		if err := storage.Get(tc, key, val); err != nil {
 			log.Errorf(c, "get entity failed %s", err.Error())
 			return err
 		}
-		lock := entity.getlock()
-		lock.Timestamp = getTime()
-		lock.RequestID = ""
-		if retry {
-			lock.Retries++
+		for _, prop := range *val {
+			switch prop.Name {
+			case "lock_timestamp":
+				prop.Value = getTime()
+			case "lock_request":
+				prop.Value = ""
+			case "lock_retries":
+				if retry {
+					prop.Value = int(prop.Value.(int64) + 1)
+				}
+			}
 		}
-		if _, err := storage.Put(tc, key, entity); err != nil {
+		if _, err := storage.Put(tc, key, val); err != nil {
 			log.Errorf(c, "put entity failed %s", err.Error())
 			return err
 		}
 		return nil
-	}, &datastore.TransactionOptions{XG: false, Attempts: attempts})
+	}, nil)
 	return err
 }
 

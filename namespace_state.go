@@ -45,6 +45,15 @@ const (
 	namespaceKind = "namespace"
 )
 
+func (s *namespaceState) copyFrom(x namespaceState) {
+	s.common = x.common
+	s.lock = x.lock
+	s.Namespace = x.Namespace
+	s.ShardsTotal = x.ShardsTotal
+	s.ShardsSuccessful = x.ShardsSuccessful
+	s.ShardsFailed = x.ShardsFailed
+}
+
 func (s *namespaceState) jobID() string {
 	parts := strings.Split(s.id, "-")
 	return parts[0] + "-" + parts[1]

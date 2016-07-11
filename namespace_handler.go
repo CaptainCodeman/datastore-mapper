@@ -7,6 +7,7 @@ import (
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/taskqueue"
 )
 
 const (
@@ -33,6 +34,7 @@ func namespaceHandler(w http.ResponseWriter, r *http.Request) {
 	ns := new(namespaceState)
 
 	if err := GetLock(c, k, ns, seq); err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		if serr, ok := err.(*LockError); ok {
 			// for locking errors, the error gives us the response to use
 			w.WriteHeader(serr.Response)
@@ -41,7 +43,6 @@ func namespaceHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error()))
 		}
-		log.Errorf(c, "error %s", err.Error())
 		return
 	}
 
@@ -50,9 +51,9 @@ func namespaceHandler(w http.ResponseWriter, r *http.Request) {
 
 	j, err := getJob(c, ns.jobID())
 	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, ns, false)
 		return
 	}
@@ -67,18 +68,44 @@ func namespaceHandler(w http.ResponseWriter, r *http.Request) {
 	err = ns.split(c)
 	if err != nil {
 		// this will cause a task retry
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, ns, false)
 		return
 	}
 
-	// TODO: create task to update iterator / job
-	if _, err := storage.Put(c, k, ns); err != nil {
+	// update namespace status within a transaction
+	err = storage.RunInTransaction(c, func(tc context.Context) error {
+		fresh := new(namespaceState)
+		if err := storage.Get(tc, k, fresh); err != nil {
+			return err
+		}
+
+		// shards can already be processing ahead of the total being written
+		fresh.ShardsTotal = ns.ShardsTotal
+		fresh.RequestID = ""
+
+		// if all shards have completed, schedule namespace/completed to update job
+		if fresh.ShardsSuccessful == fresh.ShardsTotal {
+			t := NewLockTask(k, fresh, config.BasePath+namespaceCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, queue); err != nil {
+				log.Errorf(c, "add task %s", err.Error())
+				return err
+			}
+		}
+
+		if _, err := storage.Put(tc, k, fresh); err != nil {
+			return err
+		}
+
+		return nil
+	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+
+	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, ns, false)
 		return
 	}
@@ -100,6 +127,7 @@ func namespaceCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	ns := new(namespaceState)
 
 	if err := GetLock(c, k, ns, seq); err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		if serr, ok := err.(*LockError); ok {
 			// for locking errors, the error gives us the response to use
 			w.WriteHeader(serr.Response)
@@ -108,7 +136,6 @@ func namespaceCompleteHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error()))
 		}
-		log.Errorf(c, "error %s", err.Error())
 		return
 	}
 
@@ -117,9 +144,9 @@ func namespaceCompleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	j, err := getJob(c, ns.jobID())
 	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, ns, false)
 		return
 	}
@@ -132,9 +159,9 @@ func namespaceCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	ns.job = j
 
 	if err := ns.rollup(c); err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, ns, false)
 		return
 	}
@@ -145,13 +172,18 @@ func namespaceCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	// update namespace status and job within a transaction
 	jk := datastore.NewKey(c, config.DatastorePrefix+jobKind, ns.jobID(), 0, nil)
 	err = storage.RunInTransaction(c, func(tc context.Context) error {
-		if err := storage.Get(tc, jk, j); err != nil {
+		fresh := new(namespaceState)
+		keys := []*datastore.Key{k, jk}
+		vals := []interface{}{fresh, j}
+		if err := storage.GetMulti(tc, keys, vals); err != nil {
 			return err
 		}
+
 		if j.Abort {
 			return nil
 		}
 
+		fresh.copyFrom(*ns)
 		j.NamespacesSuccessful++
 		j.common.rollup(ns.common)
 
@@ -161,19 +193,16 @@ func namespaceCompleteHandler(w http.ResponseWriter, r *http.Request) {
 			j.RequestID = ""
 		}
 
-		if _, err := storage.Put(tc, k, ns); err != nil {
-			return err
-		}
-		if _, err := storage.Put(tc, jk, j); err != nil {
+		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
 			return err
 		}
 		return nil
 	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
 
 	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, ns, false)
 		return
 	}

@@ -26,6 +26,12 @@ const (
 	iteratorKind = "iterator"
 )
 
+func (it *iterator) copyFrom(x iterator) {
+	it.common = x.common
+	it.lock = x.lock
+	it.Namespace = x.Namespace
+}
+
 func (it *iterator) process(c context.Context) error {
 	// process the current namespace - split the query and create shards
 	log.Debugf(c, "process %s", it.Namespace)

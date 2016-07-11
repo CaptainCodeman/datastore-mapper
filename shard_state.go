@@ -50,6 +50,16 @@ const (
 	shardKind = "shard"
 )
 
+func (s *shardState) copyFrom(x shardState) {
+	s.common = x.common
+	s.lock = x.lock
+	s.Shard = x.Shard
+	s.Namespace = x.Namespace
+	s.Description = x.Description
+	s.KeyRange = x.KeyRange
+	s.Cursor = x.Cursor
+}
+
 func (s *shardState) jobID() string {
 	parts := strings.Split(s.id, "-")
 	return parts[0] + "-" + parts[1]

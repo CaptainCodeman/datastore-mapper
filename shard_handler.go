@@ -34,6 +34,7 @@ func shardHandler(w http.ResponseWriter, r *http.Request) {
 	s := new(shardState)
 
 	if err := GetLock(c, k, s, seq); err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		if serr, ok := err.(*LockError); ok {
 			// for locking errors, the error gives us the response to use
 			w.WriteHeader(serr.Response)
@@ -42,7 +43,6 @@ func shardHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error()))
 		}
-		log.Errorf(c, "error %s", err.Error())
 		return
 	}
 
@@ -51,6 +51,7 @@ func shardHandler(w http.ResponseWriter, r *http.Request) {
 
 	j, err := getJob(c, s.jobID())
 	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		ClearLock(c, k, s, false)
@@ -67,6 +68,7 @@ func shardHandler(w http.ResponseWriter, r *http.Request) {
 	completed, err := s.iterate(c)
 	if err != nil {
 		// this will cause a task retry
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		ClearLock(c, k, s, false)
@@ -84,12 +86,13 @@ func shardHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = ScheduleLock(c, k, s, url, nil, queue)
 	if err != nil {
 		// this will cause a task retry
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		ClearLock(c, k, s, false)
-	} else {
-		w.WriteHeader(http.StatusOK)
+		return
 	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func shardCompleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +109,7 @@ func shardCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	s := new(shardState)
 
 	if err := GetLock(c, k, s, seq); err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		if serr, ok := err.(*LockError); ok {
 			// for locking errors, the error gives us the response to use
 			w.WriteHeader(serr.Response)
@@ -114,7 +118,6 @@ func shardCompleteHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error()))
 		}
-		log.Errorf(c, "error %s", err.Error())
 		return
 	}
 
@@ -123,6 +126,7 @@ func shardCompleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	j, err := getJob(c, s.jobID())
 	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		ClearLock(c, k, s, false)
@@ -137,9 +141,9 @@ func shardCompleteHandler(w http.ResponseWriter, r *http.Request) {
 	s.job = j
 
 	if err := s.rollup(c); err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
-		log.Errorf(c, "error %s", err.Error())
 		ClearLock(c, k, s, false)
 		return
 	}
@@ -149,37 +153,36 @@ func shardCompleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	// update shard status and owning namespace within a transaction
 	sk := datastore.NewKey(c, config.DatastorePrefix+namespaceKind, s.namespaceID(), 0, nil)
-	sp := new(namespaceState)
 	err = storage.RunInTransaction(c, func(tc context.Context) error {
-		if err := storage.Get(tc, sk, sp); err != nil {
+		fresh := new(shardState)
+		sp := new(namespaceState)
+		keys := []*datastore.Key{k, sk}
+		vals := []interface{}{fresh, sp}
+		if err := storage.GetMulti(tc, keys, vals); err != nil {
 			return err
 		}
 
+		fresh.copyFrom(*s)
 		sp.ShardsSuccessful++
 		sp.common.rollup(s.common)
-
-		if _, err := storage.Put(tc, k, s); err != nil {
-			return err
-		}
-		if _, err := storage.Put(tc, sk, sp); err != nil {
-			return err
-		}
 
 		// if all shards have completed, schedule namespace/completed to update job
 		if sp.ShardsSuccessful == sp.ShardsTotal {
 			t := NewLockTask(sk, sp, config.BasePath+namespaceCompleteURL, nil)
-			if _, err := storage.Put(tc, sk, sp); err != nil {
-				return err
-			}
 			if _, err := taskqueue.Add(tc, t, queue); err != nil {
 				return err
 			}
+		}
+
+		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+			return err
 		}
 
 		return nil
 	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
 
 	if err != nil {
+		log.Errorf(c, "error %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(err.Error()))
 		ClearLock(c, k, s, false)
