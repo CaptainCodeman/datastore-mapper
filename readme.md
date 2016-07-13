@@ -74,7 +74,7 @@ lifecycle events:
 * Shard Started/Completed
 * Slice Started/Completed
 
-See the [/example/log_photos.go](/blob/master/example/log_photos.go) file for an example. 
+See the [/example/log_photos.go](/example/log_photos.go) file for an example. 
 
 ### Local Development
 The example application will run locally but needs a `service-account.json` credentials

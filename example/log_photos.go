@@ -33,39 +33,41 @@ func init() {
 }
 
 func (p *photoLogger) Query(r *http.Request) (*mapper.Query, error) {
-	v := r.URL.Query()
+	/*
+		v := r.URL.Query()
 
-	fromStr := v.Get("from")
-	toStr := v.Get("to")
-	now := time.Now().UTC()
+		fromStr := v.Get("from")
+		toStr := v.Get("to")
+		now := time.Now().UTC()
 
-	var from time.Time
-	var to time.Time
-	var err error
+		var from time.Time
+		var to time.Time
+		var err error
 
-	// default to previous day but allow any
-	if toStr == "" {
-		to = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	} else {
-		to, err = time.Parse(dateFormat, toStr)
-		if err != nil {
-			return nil, err
+		// default to previous day but allow any
+		if toStr == "" {
+			to = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		} else {
+			to, err = time.Parse(dateFormat, toStr)
+			if err != nil {
+				return nil, err
+			}
 		}
-	}
 
-	if fromStr == "" {
-		from = to.Add(time.Duration(-24) * time.Hour)
-	} else {
-		from, err = time.Parse(dateFormat, fromStr)
-		if err != nil {
-			return nil, err
+		if fromStr == "" {
+			from = to.Add(time.Duration(-24) * time.Hour)
+		} else {
+			from, err = time.Parse(dateFormat, fromStr)
+			if err != nil {
+				return nil, err
+			}
 		}
-	}
+	*/
 
 	q := mapper.NewQuery("photo")
 	q = q.Namespace("") // TODO: allow namespace to be set from request, use * for 'all'
-	q = q.Filter("taken >=", from)
-	q = q.Filter("taken <", to)
+	// q = q.Filter("taken >=", from)
+	// q = q.Filter("taken <", to)
 	q = q.Limit(100) // this is the batch size to use when processing (maybe too obscure?)
 
 	return q, nil
