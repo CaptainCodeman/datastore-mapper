@@ -44,6 +44,16 @@ const (
 	greaterThan
 )
 
+var (
+	operatorToString = map[operator]string{
+		lessThan:    "<",
+		lessEq:      "<=",
+		equal:       "=",
+		greaterEq:   ">=",
+		greaterThan: ">",
+	}
+)
+
 func init() {
 	gob.Register(&Query{})
 }
@@ -51,7 +61,7 @@ func init() {
 // NewQuery created a new Query
 func NewQuery(kind string) *Query {
 	return &Query{
-		kind:      kind,
+		kind: kind,
 	}
 }
 
@@ -129,6 +139,31 @@ func (q *Query) clone() *Query {
 		copy(x.filter, q.filter)
 	}
 	return &x
+}
+
+// String returns a string representatin of the query for display purposes only
+func (q *Query) String() string {
+	// TODO
+	return ""
+}
+
+func (f *filter) String() string {
+	var op string
+	switch f.Op {
+	case lessEq:
+		op = "<="
+	case greaterEq:
+		op = ">="
+	case lessThan:
+		op = "<"
+	case greaterThan:
+		op = ">"
+	case equal:
+		op = "="
+	default:
+		op = "?"
+	}
+	return fmt.Sprintf("%s %s %s", f.FieldName, op, f.Value)
 }
 
 func (q *Query) toDatastoreQuery() *datastore.Query {

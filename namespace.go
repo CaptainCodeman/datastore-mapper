@@ -93,6 +93,9 @@ func (n *namespace) shardFilename(shard int) string {
 func (n *namespace) split(c context.Context, config Config) error {
 	keyRanges := []*KeyRange{}
 
+	// TODO: split query on more than just key range, include any property filters
+	// TODO: store query on shard instead of KeyRange and use that for processing
+
 	if n.job.Shards == 1 {
 		keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, nil, Ascending, false))
 	} else {
