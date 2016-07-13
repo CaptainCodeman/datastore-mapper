@@ -3,7 +3,96 @@ This is an implementation of the mapper part of the
 [appengine map-reduce framework](https://github.com/GoogleCloudPlatform/appengine-mapreduce)
 developed using in [Go](https://golang.org/).
 
-It is alpha status while I develop the API and should not be used in production.
+## Status
+It is alpha status while I develop the API and should not be used in production yet but
+it's been successfully used to export datastore entities to JSON for import into BigQuery
+and for schema migrations and aggregation reporting.
+
+More work is needed to finish the query sharding when using filters and to make the file
+output writing more robust.
+
+## Usage
+The mapper server is a regular Go `http.Handler` so can be hosted at any path. Just make
+sure that the path used is also passed in to the constructor. The default path provided
+is `/_ah/mapper/`.
+
+Adding with default options:
+
+    func init() {
+        mapperServer, _ := mapper.NewServer(mapper.DefaultPath)
+        http.Handle(mapper.DefaultPath, mapperServer)
+    }
+
+The default configuration can be overridden by passing additional options, for example:
+
+    func init() {
+        mapperServer, _ := mapper.NewServer(mapper.DefaultPath,
+            mapper.DatastorePrefix("map_"),
+            mapper.Oversampling(16),
+            mapper.Retries(8),
+            mapper.LogVerbose,
+        )
+        http.Handle(mapper.DefaultPath, mapperServer)
+    }
+
+See the `/config.go` file for all configuration options.
+
+The mapper will use memcache for datastore operations using [nds](https://github.com/qedus/nds)
+but this can be controlled by calling either of:
+
+    mapper.UseDatastore()
+
+Or, to use memcache again:
+
+    mapper.UseMemcached()
+
+## Mapper Jobs
+Mapper Jobs are defined by creating a Go struct that implements the `JobSpec` interface
+used to parse request parameters and create the datastore query spec:
+
+    Query(r *http.Request) (*Query, error)
+
+Plus, one of the processing interfaces depending on whether you want to process the entities
+individually or in batches:
+
+    Next(c context.Context, w io.Writer, counters Counters, key *datastore.Key) error
+    NextBatch(c context.Context, w io.Writer, counters Counters, keys []*datastore.Key) error
+
+Processing is currently 'keys only' but performance with go batching is very good and gives
+the benefit of reducing cost but I have plans to provide a way to query and pass entities
+straight from the datastore.
+
+If using the Cloud Storage feature to export the `io.writer` can be used to serialize entities
+in whatever format is desired (JSON works great for BigQuery). If no bucket is defined when
+starting a job then any output written to the writer will be discarded.  
+
+There are additional interfaces that can be implemented to receive notification of various
+lifecycle events:
+
+* Job Started/Completed
+* Namespcae Started/Completed
+* Shard Started/Completed
+* Slice Started/Completed
+
+See the [/example/log_photos.go](/blob/master/example/log_photos.go) file for an example. 
+
+### Local Development
+The example application will run locally but needs a `service-account.json` credentials
+file in order to use the cloud storage output.
+
+Kicking off a job is done by POSTing to the `http://localhost:8080/_ah/mapper/start` endpoint
+passing the name of the job spec and optionally:
+
+* **shards**
+  The number of shards to use
+* **queue**
+  The taskqueue to schedule tasks on
+* **bucket**
+  The GCS bucket to write output to
+
+Example:
+
+    http://localhost:8080/_ah/mapper/start?name=main.photoLogger&shards=8&bucket=staging.[my-app].appspot.com
 
 ## Why only the mapper?
 Technology moves on and Google's cloud platform now provides other services that handle
@@ -131,6 +220,8 @@ Your job functions will be called at the appropriate points to perform whatever 
 they need to.
 
 ## Output
+For simple aggregation operations the inbuilt counter can be used.
+
 Although I have no plans to build in any shuffle or reduce steps, I wanted to provide
 an easy way to write data to cloud storage (a primary use-case will be exporting data
 in JSON format for BigQuery). Cloud Storage provides the ability to write each file in
@@ -142,4 +233,5 @@ file). This is working but needs to be optimized and made more robust (e.g. to c
 the limits on how many files can be combined).
 
 Another option is to stream inserts directly into BigQuery which saves the intermediate
-output writing and subsequent import from cloud storage.
+output writing and subsequent import from cloud storage (once streamed inserting into
+partitioned tables is an option, this will make this a better option).
