@@ -13,6 +13,7 @@ import (
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/taskqueue"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -20,8 +21,8 @@ import (
 )
 
 type (
-	// namespaceState processes a single namespace for a job
-	namespaceState struct {
+	// namespace processes a single namespace for a job
+	namespace struct {
 		common
 		lock
 
@@ -37,7 +38,7 @@ type (
 		// ShardsFailed is the number of shards failed
 		ShardsFailed int `datastore:"shards_failed,noindex"`
 
-		job *jobState
+		job *job
 	}
 )
 
@@ -45,22 +46,30 @@ const (
 	namespaceKind = "namespace"
 )
 
-func (s *namespaceState) copyFrom(x namespaceState) {
-	s.common = x.common
-	s.lock = x.lock
-	s.Namespace = x.Namespace
-	s.ShardsTotal = x.ShardsTotal
-	s.ShardsSuccessful = x.ShardsSuccessful
-	s.ShardsFailed = x.ShardsFailed
+func (n *namespace) setJob(job *job) {
+	n.job = job
 }
 
-func (s *namespaceState) jobID() string {
-	parts := strings.Split(s.id, "-")
+func (n *namespace) copyFrom(x namespace) {
+	n.common = x.common
+	n.lock = x.lock
+	n.Namespace = x.Namespace
+	n.ShardsTotal = x.ShardsTotal
+	n.ShardsSuccessful = x.ShardsSuccessful
+	n.ShardsFailed = x.ShardsFailed
+}
+
+func (n *namespace) jobKey(c context.Context, config Config) *datastore.Key {
+	return datastore.NewKey(c, config.DatastorePrefix+jobKind, n.jobID(), 0, nil)
+}
+
+func (n *namespace) jobID() string {
+	parts := strings.Split(n.id, "-")
 	return parts[0] + "-" + parts[1]
 }
 
-func (s *namespaceState) namespaceFilename() string {
-	parts := strings.Split(s.id, "-")
+func (n *namespace) namespaceFilename() string {
+	parts := strings.Split(n.id, "-")
 	ns := parts[2]
 	if ns == "" {
 		ns = "~"
@@ -70,8 +79,8 @@ func (s *namespaceState) namespaceFilename() string {
 	return parts[0] + "-" + parts[1] + "/" + ns + ".json"
 }
 
-func (s *namespaceState) shardFilename(shard int) string {
-	parts := strings.Split(s.id, "-")
+func (n *namespace) shardFilename(shard int) string {
+	parts := strings.Split(n.id, "-")
 	ns := parts[2]
 	if ns == "" {
 		ns = "~"
@@ -81,18 +90,18 @@ func (s *namespaceState) shardFilename(shard int) string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + strconv.Itoa(shard) + ".json"
 }
 
-func (s *namespaceState) split(c context.Context) error {
+func (n *namespace) split(c context.Context, config Config) error {
 	keyRanges := []*KeyRange{}
 
-	if s.job.Shards == 1 {
-		keyRanges = append(keyRanges, newKeyRange(s.Namespace, nil, nil, Ascending, false))
+	if n.job.Shards == 1 {
+		keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, nil, Ascending, false))
 	} else {
-		ns, _ := appengine.Namespace(c, s.Namespace)
-		minimumShards := s.job.Shards
-		oversamplingFactor := config.OversamplingFactor
+		ns, _ := appengine.Namespace(c, n.Namespace)
+		minimumShards := n.job.Shards
+		oversamplingFactor := config.Oversampling
 		limit := minimumShards * oversamplingFactor
 
-		q := s.job.Query.toDatastoreQuery()
+		q := n.job.Query.toDatastoreQuery()
 		q = q.Order("__scatter__")
 		q = q.Limit(limit)
 		q = q.KeysOnly()
@@ -106,7 +115,7 @@ func (s *namespaceState) split(c context.Context) error {
 			// There are no entities with scatter property. We have no idea how to split.
 
 			// TODO: split property key
-			keyRanges = append(keyRanges, newKeyRange(s.Namespace, nil, nil, Ascending, true))
+			keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, nil, Ascending, true))
 		} else {
 			// this assumes that all the keys are consistently int or string (reasonable)
 			if randomKeys[0].IntID() > 0 {
@@ -124,49 +133,47 @@ func (s *namespaceState) split(c context.Context) error {
 			// records - some namespaces may only need a single task to process
 
 			if len(randomKeys) > minimumShards {
-				randomKeys, _ = s.chooseSplitPoints(randomKeys, minimumShards)
+				randomKeys, _ = n.chooseSplitPoints(randomKeys, minimumShards)
 			}
 
-			keyRanges = append(keyRanges, newKeyRange(s.Namespace, nil, randomKeys[0], Ascending, false))
+			keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, randomKeys[0], Ascending, false))
 			for i := 0; i < len(randomKeys)-1; i++ {
-				keyRanges = append(keyRanges, newKeyRange(s.Namespace, randomKeys[i], randomKeys[i+1], Ascending, true))
+				keyRanges = append(keyRanges, newKeyRange(n.Namespace, randomKeys[i], randomKeys[i+1], Ascending, true))
 			}
-			keyRanges = append(keyRanges, newKeyRange(s.Namespace, randomKeys[len(randomKeys)-1], nil, Ascending, true))
+			keyRanges = append(keyRanges, newKeyRange(n.Namespace, randomKeys[len(randomKeys)-1], nil, Ascending, true))
 		}
 	}
 
-	s.ShardsTotal = len(keyRanges)
-
-	// if no keyranges then nothing to do for this namespace, short-circuit to completed
+	n.ShardsTotal = len(keyRanges)
 
 	// Even though this method does not schedule shard task and save shard state
 	// transactionally, it's safe for taskqueue to retry this logic because
 	// the initial shard_state for each shard is the same from any retry.
-	// This is an important yet reasonable assumption on ShardState.
+	// This is an important yet reasonable assumption on shard.
 
 	keys := make([]*datastore.Key, len(keyRanges))
 	for shardNumber := 0; shardNumber < len(keyRanges); shardNumber++ {
-		id := fmt.Sprintf("%s-%d", s.id, shardNumber)
+		id := fmt.Sprintf("%s-%d", n.id, shardNumber)
 		key := datastore.NewKey(c, config.DatastorePrefix+shardKind, id, 0, nil)
 		keys[shardNumber] = key
 	}
 
-	shards := make([]*shardState, len(keyRanges))
+	shards := make([]*shard, len(keyRanges))
 	if err := storage.GetMulti(c, keys, shards); err != nil {
 		if me, ok := err.(appengine.MultiError); ok {
 			for shardNumber, merr := range me {
 				if merr == datastore.ErrNoSuchEntity {
 					// keys[shardNumber] is missing, create the shard for it
-					key := keys[shardNumber]
+					k := keys[shardNumber]
 
-					shard := new(shardState)
-					shard.start()
-					shard.Shard = shardNumber
-					shard.Namespace = s.Namespace
-					shard.KeyRange = keyRanges[shardNumber]
-					shard.Description = keyRanges[shardNumber].String()
+					s := new(shard)
+					s.start()
+					s.Shard = shardNumber
+					s.Namespace = n.Namespace
+					s.KeyRange = keyRanges[shardNumber]
+					s.Description = keyRanges[shardNumber].String()
 
-					if _, err := ScheduleLock(c, key, shard, config.BasePath+shardURL, nil, s.queue); err != nil {
+					if err := ScheduleLock(c, k, s, config.Path+shardURL, nil, n.queue); err != nil {
 						return err
 					}
 				}
@@ -180,8 +187,74 @@ func (s *namespaceState) split(c context.Context) error {
 	return nil
 }
 
+func (n *namespace) update(c context.Context, config Config, key *datastore.Key) error {
+	// update namespace status within a transaction
+	return storage.RunInTransaction(c, func(tc context.Context) error {
+		fresh := new(namespace)
+		if err := storage.Get(tc, key, fresh); err != nil {
+			return err
+		}
+
+		// shards can already be processing ahead of this total being written
+		fresh.ShardsTotal = n.ShardsTotal
+		fresh.RequestID = ""
+
+		// if all shards have completed, schedule namespace/completed to update job
+		if fresh.ShardsSuccessful == fresh.ShardsTotal {
+			t := NewLockTask(key, fresh, config.Path+namespaceCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, n.queue); err != nil {
+				log.Errorf(c, "add task %s", err.Error())
+				return err
+			}
+		}
+
+		if _, err := storage.Put(tc, key, fresh); err != nil {
+			return err
+		}
+
+		return nil
+	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+}
+
+func (n *namespace) completed(c context.Context, config Config, key *datastore.Key) error {
+	n.complete()
+	n.RequestID = ""
+
+	// update namespace status and job within a transaction
+	fresh := new(namespace)
+	jobKey := n.jobKey(c, config)
+	job := new(job)
+	return storage.RunInTransaction(c, func(tc context.Context) error {
+		keys := []*datastore.Key{key, jobKey}
+		vals := []interface{}{fresh, job}
+		if err := storage.GetMulti(tc, keys, vals); err != nil {
+			return err
+		}
+
+		if job.Abort {
+			return nil
+		}
+
+		fresh.copyFrom(*n)
+		job.NamespacesSuccessful++
+		job.common.rollup(n.common)
+
+		if job.NamespacesSuccessful == job.NamespacesTotal && !job.Iterating {
+			t := NewLockTask(jobKey, job, config.Path+jobCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, n.queue); err != nil {
+				return err
+			}
+		}
+
+		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+			return err
+		}
+		return nil
+	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+}
+
 // Returns the best split points given a random set of datastore.Keys
-func (s *namespaceState) chooseSplitPoints(sortedKeys []*datastore.Key, shardCount int) ([]*datastore.Key, error) {
+func (n *namespace) chooseSplitPoints(sortedKeys []*datastore.Key, shardCount int) ([]*datastore.Key, error) {
 	indexStride := float64(len(sortedKeys)) / float64(shardCount)
 	if indexStride < 1 {
 		return nil, fmt.Errorf("not enough keys")
@@ -196,9 +269,9 @@ func (s *namespaceState) chooseSplitPoints(sortedKeys []*datastore.Key, shardCou
 }
 
 // rollup shards into single namespace file
-func (s *namespaceState) rollup(c context.Context) error {
+func (n *namespace) rollup(c context.Context) error {
 	// nothing to do if no output writing
-	if s.job.Bucket == "" {
+	if n.job.Bucket == "" {
 		return nil
 	}
 
@@ -231,56 +304,57 @@ func (s *namespaceState) rollup(c context.Context) error {
 	// TODO: check if shard file already exists and skip compose
 	// TODO: logic to handle more than 32 composable files
 
-	namespaceFilename := s.namespaceFilename()
+	namespaceFilename := n.namespaceFilename()
 	log.Debugf(c, "compose %s", namespaceFilename)
 	req := &apistorage.ComposeRequest{
 		Destination:   &apistorage.Object{Name: namespaceFilename},
-		SourceObjects: make([]*apistorage.ComposeRequestSourceObjects, s.ShardsTotal),
+		SourceObjects: make([]*apistorage.ComposeRequestSourceObjects, n.ShardsTotal),
 	}
-	for i := 0; i < s.ShardsTotal; i++ {
-		shardFilename := s.shardFilename(i)
+	for i := 0; i < n.ShardsTotal; i++ {
+		shardFilename := n.shardFilename(i)
 		log.Debugf(c, "source %s", shardFilename)
 		req.SourceObjects[i] = &apistorage.ComposeRequestSourceObjects{Name: shardFilename}
 	}
 
-	res, err := service.Objects.Compose(s.job.Bucket, namespaceFilename, req).Context(c).Do()
+	res, err := service.Objects.Compose(n.job.Bucket, namespaceFilename, req).Context(c).Do()
 	if err != nil {
 		return err
 	}
 	log.Debugf(c, "created shard file %s gen %d %d bytes", res.Name, res.Generation, res.Size)
 
 	// delete slice files
-	for i := 0; i < s.ShardsTotal; i++ {
-		shardFilename := s.shardFilename(i)
+	for i := 0; i < n.ShardsTotal; i++ {
+		shardFilename := n.shardFilename(i)
 		log.Debugf(c, "delete %s", shardFilename)
-		service.Objects.Delete(s.job.Bucket, shardFilename).Context(c).Do()
+		service.Objects.Delete(n.job.Bucket, shardFilename).Context(c).Do()
 		// do we care about errors? provide separate cleanup option
 	}
 
 	return nil
 }
 
-/* datastore */
-func (s *namespaceState) Load(props []datastore.Property) error {
-	datastore.LoadStruct(s, props)
-	s.common.Load(props)
-	s.lock.Load(props)
+// Load implements the datastore PropertyLoadSaver imterface
+func (n *namespace) Load(props []datastore.Property) error {
+	datastore.LoadStruct(n, props)
+	n.common.Load(props)
+	n.lock.Load(props)
 	return nil
 }
 
-func (s *namespaceState) Save() ([]datastore.Property, error) {
-	props, err := datastore.SaveStruct(s)
+// Save implements the datastore PropertyLoadSaver imterface
+func (n *namespace) Save() ([]datastore.Property, error) {
+	props, err := datastore.SaveStruct(n)
 	if err != nil {
 		return nil, err
 	}
 
-	jprops, err := s.common.Save()
+	jprops, err := n.common.Save()
 	if err != nil {
 		return nil, err
 	}
 	props = append(props, jprops...)
 
-	lprops, err := s.lock.Save()
+	lprops, err := n.lock.Save()
 	if err != nil {
 		return nil, err
 	}

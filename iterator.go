@@ -7,6 +7,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/taskqueue"
 )
 
 type (
@@ -18,7 +19,7 @@ type (
 		// Namespace is the namespace to begin iterating from
 		Namespace string `datastore:"namespace,noindex"`
 
-		job *jobState
+		job *job
 	}
 )
 
@@ -26,13 +27,32 @@ const (
 	iteratorKind = "iterator"
 )
 
+func (it *iterator) getQueue() string {
+	return it.queue
+}
+func (it *iterator) setQueue(queue string) {
+	it.queue = queue
+}
+
+func (it *iterator) setJob(job *job) {
+	it.job = job
+}
+
 func (it *iterator) copyFrom(x iterator) {
 	it.common = x.common
 	it.lock = x.lock
 	it.Namespace = x.Namespace
 }
 
-func (it *iterator) process(c context.Context) error {
+func (it *iterator) jobKey(c context.Context, config Config) *datastore.Key {
+	return datastore.NewKey(c, config.DatastorePrefix+jobKind, it.id, 0, nil)
+}
+
+func (it *iterator) jobID() string {
+	return it.id
+}
+
+func (it *iterator) process(c context.Context, config Config) error {
 	// process the current namespace - split the query and create shards
 	log.Debugf(c, "process %s", it.Namespace)
 
@@ -41,29 +61,11 @@ func (it *iterator) process(c context.Context) error {
 	id := fmt.Sprintf("%s-%s", it.id, it.Namespace)
 	key := datastore.NewKey(c, config.DatastorePrefix+namespaceKind, id, 0, nil)
 
-	s := new(namespaceState)
-	s.start()
-	s.Namespace = it.Namespace
+	ns := new(namespace)
+	ns.start()
+	ns.Namespace = it.Namespace
 
-	_, err := ScheduleLock(c, key, s, config.BasePath+namespaceURL, nil, it.queue)
-	return err
-
-	/*
-		ns, _ := appengine.Namespace(c, n.Namespace)
-
-		q := datastore.NewQuery("photo")
-		q = q.Order("__scatter__")
-		q = q.Limit(3)
-		q = q.KeysOnly()
-		randomKeys, err := q.GetAll(ns, nil)
-		if err != nil || len(randomKeys) == 0 {
-			return nil
-		}
-
-		for i := 0; i < len(randomKeys); i++ {
-			log.Debugf(c, "key %d %s", i, randomKeys[i].String())
-		}
-	*/
+	return ScheduleLock(c, key, ns, config.Path+namespaceURL, nil, it.queue)
 }
 
 func (it *iterator) createQuery(c context.Context) *datastore.Query {
@@ -76,7 +78,7 @@ func (it *iterator) createQuery(c context.Context) *datastore.Query {
 	return q
 }
 
-func (it *iterator) iterate(c context.Context) (bool, error) {
+func (it *iterator) iterate(c context.Context, config Config) (bool, error) {
 	// use the full 10 minutes allowed (assuming front-end instance type)
 	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
 
@@ -86,7 +88,7 @@ func (it *iterator) iterate(c context.Context) (bool, error) {
 	if len(it.job.Query.namespace) > 0 {
 		for _, namespace := range it.job.Query.namespace {
 			it.Namespace = namespace
-			it.process(c)
+			it.process(c, config)
 		}
 		return true, nil
 	}
@@ -116,7 +118,7 @@ func (it *iterator) iterate(c context.Context) (bool, error) {
 			}
 
 			it.Namespace = key.StringID()
-			if err := it.process(c); err != nil {
+			if err := it.process(c, config); err != nil {
 				return false, err
 			}
 			count++
@@ -138,7 +140,48 @@ func (it *iterator) iterate(c context.Context) (bool, error) {
 	}
 }
 
-/* datastore */
+func (it *iterator) completed(c context.Context, config Config, key *datastore.Key) error {
+	// mark iterator as complete
+	it.complete()
+	it.RequestID = ""
+
+	// update iterator status and job within a transaction
+	fresh := new(iterator)
+	jobKey := it.jobKey(c, config)
+	job := new(job)
+	return storage.RunInTransaction(c, func(tc context.Context) error {
+		keys := []*datastore.Key{key, jobKey}
+		vals := []interface{}{fresh, job}
+		if err := storage.GetMulti(tc, keys, vals); err != nil {
+			return err
+		}
+
+		if job.Abort {
+			return nil
+		}
+		fresh.copyFrom(*it)
+		job.NamespacesTotal += int(it.Count)
+		job.Iterating = false
+		// only the iterator walltime is rolled up into the job counts
+		job.WallTime += it.WallTime
+
+		// it's unlikely (but possible) that the shards and namespaces completed
+		// before this task so handle case that job is now also fully complete
+		if job.NamespacesSuccessful == job.NamespacesTotal && !job.Iterating {
+			t := NewLockTask(jobKey, job, config.Path+jobCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, it.queue); err != nil {
+				return err
+			}
+		}
+
+		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+			return err
+		}
+		return nil
+	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+}
+
+// Load implements the datastore PropertyLoadSaver imterface
 func (it *iterator) Load(props []datastore.Property) error {
 	datastore.LoadStruct(it, props)
 	it.common.Load(props)
@@ -146,6 +189,7 @@ func (it *iterator) Load(props []datastore.Property) error {
 	return nil
 }
 
+// Save implements the datastore PropertyLoadSaver imterface
 func (it *iterator) Save() ([]datastore.Property, error) {
 	props, err := datastore.SaveStruct(it)
 	if err != nil {

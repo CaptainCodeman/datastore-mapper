@@ -17,13 +17,14 @@ import (
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/taskqueue"
 	"google.golang.org/cloud"
 	cstorage "google.golang.org/cloud/storage"
 )
 
 type (
-	// shardState processes shards for a job (slices of a namespace)
-	shardState struct {
+	// shard processes shards for a job (slices of a namespace)
+	shard struct {
 		common
 		lock
 
@@ -42,7 +43,7 @@ type (
 		// Cursor is the datastore cursor to start from
 		Cursor string `datastore:"cursor,noindex"`
 
-		job *jobState
+		job *job
 	}
 )
 
@@ -50,7 +51,11 @@ const (
 	shardKind = "shard"
 )
 
-func (s *shardState) copyFrom(x shardState) {
+func (s *shard) setJob(job *job) {
+	s.job = job
+}
+
+func (s *shard) copyFrom(x shard) {
 	s.common = x.common
 	s.lock = x.lock
 	s.Shard = x.Shard
@@ -60,17 +65,21 @@ func (s *shardState) copyFrom(x shardState) {
 	s.Cursor = x.Cursor
 }
 
-func (s *shardState) jobID() string {
+func (s *shard) namespaceKey(c context.Context, config Config) *datastore.Key {
+	return datastore.NewKey(c, config.DatastorePrefix+namespaceKind, s.namespaceID(), 0, nil)
+}
+
+func (s *shard) jobID() string {
 	parts := strings.Split(s.id, "-")
 	return parts[0] + "-" + parts[1]
 }
 
-func (s *shardState) namespaceID() string {
+func (s *shard) namespaceID() string {
 	parts := strings.Split(s.id, "-")
 	return parts[0] + "-" + parts[1] + "-" + parts[2]
 }
 
-func (s *shardState) shardFilename() string {
+func (s *shard) shardFilename() string {
 	parts := strings.Split(s.id, "-")
 	ns := parts[2]
 	if ns == "" {
@@ -81,7 +90,7 @@ func (s *shardState) shardFilename() string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + ".json"
 }
 
-func (s *shardState) sliceFilename(slice int) string {
+func (s *shard) sliceFilename(slice int) string {
 	parts := strings.Split(s.id, "-")
 	ns := parts[2]
 	if ns == "" {
@@ -92,12 +101,12 @@ func (s *shardState) sliceFilename(slice int) string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + "/" + strconv.Itoa(slice) + ".json"
 }
 
-func (s *shardState) createQuery(c context.Context) *datastore.Query {
+func (s *shard) createQuery(c context.Context) *datastore.Query {
 	q := s.job.Query.toDatastoreQuery()
 	return q
 }
 
-func (s *shardState) iterate(c context.Context) (bool, error) {
+func (s *shard) iterate(c context.Context) (bool, error) {
 	// switch namespace
 	c, _ = appengine.Namespace(c, s.Namespace)
 
@@ -201,7 +210,7 @@ func (s *shardState) iterate(c context.Context) (bool, error) {
 
 			if useSingle {
 				// TODO: check for return errors
-				single.Single(c, w, s.Counters, key)
+				single.Next(c, w, s.Counters, key)
 				s.Count++
 			} else {
 				keys = append(keys, key)
@@ -212,7 +221,7 @@ func (s *shardState) iterate(c context.Context) (bool, error) {
 
 		if useBatch {
 			// TODO: check for return errors
-			batch.Batch(c, w, s.Counters, keys)
+			batch.NextBatch(c, w, s.Counters, keys)
 			s.Count += int64(len(keys))
 		}
 
@@ -240,8 +249,45 @@ func (s *shardState) iterate(c context.Context) (bool, error) {
 	}
 }
 
+func (s *shard) completed(c context.Context, config Config, key *datastore.Key) error {
+	s.complete()
+	s.Cursor = ""
+	s.RequestID = ""
+
+	// update shard status and owning namespace within a transaction
+	fresh := new(shard)
+	nsKey := s.namespaceKey(c, config)
+	ns := new(namespace)
+
+	return storage.RunInTransaction(c, func(tc context.Context) error {
+		keys := []*datastore.Key{key, nsKey}
+		vals := []interface{}{fresh, ns}
+		if err := storage.GetMulti(tc, keys, vals); err != nil {
+			return err
+		}
+
+		fresh.copyFrom(*s)
+		ns.ShardsSuccessful++
+		ns.common.rollup(s.common)
+
+		// if all shards have completed, schedule namespace/completed to update job
+		if ns.ShardsSuccessful == ns.ShardsTotal {
+			t := NewLockTask(nsKey, ns, config.Path+namespaceCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, s.queue); err != nil {
+				return err
+			}
+		}
+
+		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+			return err
+		}
+
+		return nil
+	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+}
+
 // rollup shard slices into single file
-func (s *shardState) rollup(c context.Context) error {
+func (s *shard) rollup(c context.Context) error {
 	// nothing to do if no output writing
 	if s.job.Bucket == "" {
 		return nil
@@ -304,8 +350,8 @@ func (s *shardState) rollup(c context.Context) error {
 	return nil
 }
 
-/* datastore */
-func (s *shardState) Load(props []datastore.Property) error {
+// Load implements the datastore PropertyLoadSaver imterface
+func (s *shard) Load(props []datastore.Property) error {
 	datastore.LoadStruct(s, props)
 	s.common.Load(props)
 	s.lock.Load(props)
@@ -325,7 +371,8 @@ func (s *shardState) Load(props []datastore.Property) error {
 	return nil
 }
 
-func (s *shardState) Save() ([]datastore.Property, error) {
+// Save implements the datastore PropertyLoadSaver imterface
+func (s *shard) Save() ([]datastore.Property, error) {
 	props, err := datastore.SaveStruct(s)
 
 	jprops, err := s.common.Save()

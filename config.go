@@ -5,56 +5,112 @@ import (
 )
 
 type (
-	// Config stores mapper configuration settings and defaults
+	// Config stores mapper configuration settings
 	Config struct {
+		// Path is the mount point for the server
+		Path string
+
 		// DatastorePrefix is added to the beginning of every mapreduce collection name
 		DatastorePrefix string
-
-		// TaskPrefix is added to the beginning of every mapreduce task name
-		TaskPrefix string
-
-		// BasePath is the root to the mapreduce web handlers
-		BasePath string
 
 		// Queue is the default queue to use for mapreduce tasks if not
 		Queue string
 
-		// ShardCount is the default number of shards to use
-		ShardCount int
+		// Shards is the default number of shards to use
+		Shards int
 
-		// OversamplingFactor helps achieve more event shard distribution with 'clumpy' data
-		// clumpy is definitely a technical term
-		OversamplingFactor int
+		// Oversampling is a factor to increase the number of scatter samples
+		// and helps achieve more even shard distribution with 'clumpy' data
+		// (clumpy is definitely a technical term)
+		Oversampling int
 
 		// LeaseDuration is how long a worker will hold a lock for
 		LeaseDuration time.Duration
 
-		// MaxLeaseDuration is the time considered to be a timeout
-		MaxLeaseDuration time.Duration
+		// LeaseTimeout is the time considered to be a timeout
+		LeaseTimeout time.Duration
 
-		// TaskMaxAttempts is the maximum number of times to retry a failing task
-		TaskMaxAttempts int
+		// Retries is the maximum number of times to retry a failing task
+		Retries int
 
 		// LogVerbose controls verbose logging output
 		LogVerbose bool
 	}
 )
 
-var (
-	config = defaultConfig()
-)
-
-func defaultConfig() *Config {
+// newConfig creates a new config with default values
+func newConfig() *Config {
 	return &Config{
-		DatastorePrefix:    "MP_",
-		TaskPrefix:         "MP-",
-		BasePath:           "/mapper",
-		Queue:              "default",
-		ShardCount:         8,
-		OversamplingFactor: 32,
-		LeaseDuration:      time.Duration(30) * time.Second,
-		MaxLeaseDuration:   time.Duration(10)*time.Minute + time.Duration(30)*time.Second,
-		TaskMaxAttempts:    31,
-		LogVerbose:         true,
+		Path:            DefaultPath,
+		DatastorePrefix: "MP_",
+		Queue:           "",
+		Shards:          8,
+		Oversampling:    32,
+		LeaseDuration:   time.Duration(30) * time.Second,
+		LeaseTimeout:    time.Duration(10)*time.Minute + time.Duration(30)*time.Second,
+		Retries:         31,
+		LogVerbose:      false,
 	}
+}
+
+// DatastorePrefix sets the prefix for mapper datastore collections
+func DatastorePrefix(prefix string) func(*Config) error {
+	return func(c *Config) error {
+		c.DatastorePrefix = prefix
+		return nil
+	}
+}
+
+// Queue sets the default taskqueue to use when scheduling mapper tasks
+func Queue(queue string) func(*Config) error {
+	return func(c *Config) error {
+		c.Queue = queue
+		return nil
+	}
+}
+
+// Shards sets the default target number of shards to use
+func Shards(shards int) func(*Config) error {
+	return func(c *Config) error {
+		c.Shards = shards
+		return nil
+	}
+}
+
+// Oversampling sets the factor to use to even out sampling
+func Oversampling(factor int) func(*Config) error {
+	return func(c *Config) error {
+		c.Oversampling = factor
+		return nil
+	}
+}
+
+// LeaseDuration sets how long a worker will hold a lock for
+func LeaseDuration(duration time.Duration) func(*Config) error {
+	return func(c *Config) error {
+		c.LeaseDuration = duration
+		return nil
+	}
+}
+
+// LeaseTimeout sets how long before a lock will be considered timedout
+func LeaseTimeout(duration time.Duration) func(*Config) error {
+	return func(c *Config) error {
+		c.LeaseTimeout = duration
+		return nil
+	}
+}
+
+// Retries sets how many times to attempt retrying a failing task
+func Retries(retries int) func(*Config) error {
+	return func(c *Config) error {
+		c.Retries = retries
+		return nil
+	}
+}
+
+// LogVerbose sets verbos logging
+func LogVerbose(c *Config) error {
+	c.LogVerbose = true
+	return nil
 }

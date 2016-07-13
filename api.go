@@ -1,14 +1,20 @@
 package mapper
 
 import (
+	"fmt"
+
 	"encoding/json"
 	"net/http"
 )
 
-var (
-	// Server is the http server
-	Server = NewAPI()
-)
+// eventually, we want to embed and serve a nice polymer UI for the mapper
+func init() {
+	server.HandleFunc("/", index)
+}
+
+func index(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "mapper %s", r.URL.Path)
+}
 
 // REST handler mapping code inspired by https://github.com/dougblack/sleepy
 
@@ -48,22 +54,7 @@ type PatchSupported interface {
 	Patch(http.ResponseWriter, *http.Request, string) (int, interface{}, error)
 }
 
-// An API manages a group of resources by routing requests
-// to the correct method on a matching resource and marshalling
-// the returned data to JSON for the HTTP response.
-//
-// You can instantiate multiple APIs on separate ports. Each API
-// will manage its own set of resources.
-type API struct {
-	*http.ServeMux
-}
-
-// NewAPI allocates and returns a new API.
-func NewAPI() *API {
-	return &API{http.NewServeMux()}
-}
-
-func (api *API) requestHandler(path string, resource interface{}) http.HandlerFunc {
+func (api *mapper) requestHandler(path string, resource interface{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		id := r.URL.Path[len(path):]
@@ -124,7 +115,7 @@ func (api *API) requestHandler(path string, resource interface{}) http.HandlerFu
 // AddResource adds a new resource to an API. The API will route
 // requests that match one of the given paths to the matching HTTP
 // method on the resource.
-func (api *API) AddResource(resource interface{}, path string) {
+func (api *mapper) AddResource(resource interface{}, path string) {
 	api.HandleFunc(path, api.requestHandler(path, resource))
 }
 
@@ -132,5 +123,5 @@ func (api *API) AddResource(resource interface{}, path string) {
 GET		/jobs/		list all jobs
 GET   /jobs/id	show individual job (detail)
 POST  /jobs/id/shards
-DELETE /jobs/id	cleanup job	
+DELETE /jobs/id	cleanup job
 */

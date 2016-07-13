@@ -1,15 +1,13 @@
 package mapper
 
-import (
-	"net/http"
-)
+import ()
 
 type (
 	apiJobs struct{}
 )
 
 func init() {
-	Server.AddResource(new(apiJobs), "/jobs/")
+	server.AddResource(new(apiJobs), "/jobs/")
 }
 
 /*
@@ -18,7 +16,6 @@ func (a apiJobs) Get(w http.ResponseWriter, r *http.Request, id string) (int, in
 	data, _ := listJobs(c)
 	return http.StatusOK, data, nil
 }
-*/
 
 func (a apiJobs) Post(w http.ResponseWriter, r *http.Request, id string) (int, interface{}, error) {
 	if err := StartJob(r); err != nil {
@@ -29,6 +26,7 @@ func (a apiJobs) Post(w http.ResponseWriter, r *http.Request, id string) (int, i
 	}
 	return http.StatusOK, data, nil
 }
+*/
 
 // Get - list job states
 // Post - start job execution - type, shards, queue

@@ -8,6 +8,14 @@ import (
 )
 
 type (
+	taskable interface {
+		getID() string
+		setID(id string)
+
+		getQueue() string
+		setQueue(queue string)
+	}
+
 	// common contains properties that are common across all
 	// mapper entities (job, iterator, namespace and shard)
 	common struct {
@@ -38,6 +46,20 @@ type (
 		startTime time.Time
 	}
 )
+
+func (c *common) getID() string {
+	return c.id
+}
+func (c *common) setID(id string) {
+	c.id = id
+}
+
+func (c *common) getQueue() string {
+	return c.queue
+}
+func (c *common) setQueue(queue string) {
+	c.queue = queue
+}
 
 func (c *common) start() {
 	c.Active = true

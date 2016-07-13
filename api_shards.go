@@ -13,7 +13,7 @@ type (
 )
 
 func init() {
-	Server.AddResource(new(apiShards), "/shards/")
+	server.AddResource(new(apiShards), "/shards/")
 }
 
 /*

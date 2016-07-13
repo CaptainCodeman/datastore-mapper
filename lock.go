@@ -132,7 +132,7 @@ func NewLockTask(key *datastore.Key, entity lockable, path string, params url.Va
 }
 
 // ScheduleLock schedules a task with lock
-func ScheduleLock(c context.Context, key *datastore.Key, entity lockable, path string, params url.Values, queue string) (*taskqueue.Task, error) {
+func ScheduleLock(c context.Context, key *datastore.Key, entity lockable, path string, params url.Values, queue string) error {
 	task := NewLockTask(key, entity, path, params)
 
 	// we write the datastore entity and schedule the task within a
@@ -155,7 +155,7 @@ func ScheduleLock(c context.Context, key *datastore.Key, entity lockable, path s
 		return nil
 	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
 
-	return task, err
+	return err
 }
 
 // GetLock attempts to get and lock an entity with the given identifier
@@ -247,7 +247,7 @@ func GetLock(c context.Context, key *datastore.Key, entity lockable, sequence in
 // ClearLock clears the current lease, it should be called at the end of every task
 // execution, even if things fail, to try and prevent unecessary locks and to count
 // the number of retries
-func ClearLock(c context.Context, key *datastore.Key, entity lockable, retry bool) error {
+func ClearLock(c context.Context, key *datastore.Key, retry bool) error {
 	log.Debugf(c, "ClearLock %s %t", key.String(), retry)
 	err := storage.RunInTransaction(c, func(tc context.Context) error {
 		val := new(datastore.PropertyList)

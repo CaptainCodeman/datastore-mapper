@@ -44,8 +44,8 @@ operations.
 I already have my datastore models developed as part of my Go app and don't want to have
 to re-develop and maintain a Python or Java version as well (and sometimes it's not 
 straightforward to switch between them with different serialization methods etc...).
-The cost of including a whole other language in your solution goes beyond just the code
-- it's the development machine maintenance and all the upgrading, IDE tooling and skills
+The cost of including a whole other language in your solution goes beyond just the code,
+it's also the development machine maintenance and all the upgrading, IDE tooling and skills
 maintenance that go along with it before you get to things like the mental context
 switching.
 
@@ -139,4 +139,7 @@ chunks and then combine them which simplifies the file-writing operation substan
 to it's own file, overwriting on retry, and those slices can then be quickly rolled up
 into a single shard file and then into a single namespace file (finally to a single job
 file). This is working but needs to be optimized and made more robust (e.g. to cope with
-the limits on how many files can be combined). 
+the limits on how many files can be combined).
+
+Another option is to stream inserts directly into BigQuery which saves the intermediate
+output writing and subsequent import from cloud storage.
