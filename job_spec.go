@@ -21,7 +21,14 @@ type (
 		// should process. It is called when a new job is being initiated and passed
 		// the request in order to extract any parameters from it that may be required
 		Query(r *http.Request) (*Query, error)
-		Next(c context.Context, w io.Writer, counters Counters, key *datastore.Key) error
+		Next(c context.Context, counters Counters, key *datastore.Key) error
+	}
+
+	// JobOutput is the interface that a mapper job should implement if it wants to
+	// write file output. Files will be created for each slice and rolled up into
+	// shards and then namespaces
+	JobOutput interface {
+		Output(w io.Writer)
 	}
 
 	// JobEntity is the interface that a mapper job should implement if it wants

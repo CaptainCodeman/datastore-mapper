@@ -103,45 +103,14 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 	// use the full 10 minutes allowed (assuming front-end instance type)
 	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
 
-	// if job has output defined then create writer for it
-	var w io.Writer
-	if s.job.Bucket == "" {
-		w = ioutil.Discard
-	} else {
-		// for development we can't use the appengine default credentials so
-		// instead need to create our own oauth token source to access storage
-
-		// TODO: maybe give job a chance to generate this - it could also
-		// create the writer (?). The only reason we're doing it is to prevent
-		// duplication and also handle the file rollup operations
-		var client *cstorage.Client
-		if appengine.IsDevAppServer() {
-			jsonKey, err := ioutil.ReadFile("service-account.json")
-			if err != nil {
-				return false, err
-			}
-			conf, err := google.JWTConfigFromJSON(jsonKey, cstorage.ScopeFullControl)
-			if err != nil {
-				return false, err
-			}
-			client, err = cstorage.NewClient(c, cloud.WithTokenSource(conf.TokenSource(c)))
-			if err != nil {
-				return false, err
-			}
-		} else {
-			var err error
-			client, err = cstorage.NewClient(c)
-			if err != nil {
-				return false, err
-			}
+	jobOutput, useJobOutput := s.jobSpec.(JobOutput)
+	if useJobOutput && s.job.Bucket == "" {
+		w, err := s.createOutputFile(c)
+		if err != nil {
+			return false, err
 		}
-		defer client.Close()
-
-		o := client.Bucket(s.job.Bucket).Object(s.sliceFilename(s.Sequence)).NewWriter(c)
-		defer o.Close()
-
-		// TODO: wrap writer to count bytes and continue slice if we get close to 10Mb limit
-		w = o
+		defer w.Close()
+		jobOutput.Output(w)
 	}
 
 	q := datastore.NewQuery(s.Query.kind)
@@ -201,7 +170,7 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 				return false, err
 			}
 
-			s.jobSpec.Next(c, w, s.Counters, key)
+			s.jobSpec.Next(c, s.Counters, key)
 			s.Count++
 
 			count++
@@ -265,6 +234,42 @@ func (s *shard) completed(c context.Context, config Config, key *datastore.Key) 
 
 		return nil
 	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+}
+
+func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
+	// for development we can't use the appengine default credentials so
+	// instead need to create our own oauth token source to access storage
+
+	// TODO: maybe give job a chance to generate this - it could also
+	// create the writer (?). The only reason we're doing it is to prevent
+	// duplication and also handle the file rollup operations
+	var client *cstorage.Client
+	if appengine.IsDevAppServer() {
+		jsonKey, err := ioutil.ReadFile("service-account.json")
+		if err != nil {
+			return nil, err
+		}
+		conf, err := google.JWTConfigFromJSON(jsonKey, cstorage.ScopeFullControl)
+		if err != nil {
+			return nil, err
+		}
+		client, err = cstorage.NewClient(c, cloud.WithTokenSource(conf.TokenSource(c)))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		client, err = cstorage.NewClient(c)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer client.Close()
+
+	o := client.Bucket(s.job.Bucket).Object(s.sliceFilename(s.Sequence)).NewWriter(c)
+
+	// TODO: wrap writer to count bytes and continue slice if we get close to 10Mb limit (?)
+	return o, nil
 }
 
 // rollup shard slices into single file

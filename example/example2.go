@@ -1,8 +1,6 @@
 package main
 
 import (
-	"io"
-
 	"net/http"
 
 	"golang.org/x/net/context"
@@ -35,7 +33,7 @@ func (x *example2) Make() interface{} {
 }
 
 // Next processes the next item
-func (x *example2) Next(c context.Context, w io.Writer, counters mapper.Counters, key *datastore.Key) error {
+func (x *example2) Next(c context.Context, counters mapper.Counters, key *datastore.Key) error {
 	// the photo instance was loaded from the query by the mapper
 	counters.Increment(x.photo.Photographer.Name, 1)
 	return nil

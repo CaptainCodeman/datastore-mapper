@@ -15,7 +15,8 @@ import (
 type (
 	// export custom JSON to Cloud Storage
 	example5 struct {
-		photo *Photo
+		photo   *Photo
+		encoder *json.Encoder
 	}
 
 	photoOutput struct {
@@ -41,8 +42,12 @@ func (x *example5) Make() interface{} {
 	return x.photo
 }
 
+func (x *example5) Output(w io.Writer) {
+	x.encoder = json.NewEncoder(w)
+}
+
 // Next processes the next item
-func (x *example5) Next(c context.Context, w io.Writer, counters mapper.Counters, key *datastore.Key) error {
+func (x *example5) Next(c context.Context, counters mapper.Counters, key *datastore.Key) error {
 	photo := x.photo
 	photo.ID = key.IntID()
 
@@ -51,8 +56,7 @@ func (x *example5) Next(c context.Context, w io.Writer, counters mapper.Counters
 		Namespace: key.Namespace(),
 	}
 
-	enc := json.NewEncoder(w)
-	enc.Encode(out)
+	x.encoder.Encode(out)
 
 	return nil
 }

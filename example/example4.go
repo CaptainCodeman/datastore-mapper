@@ -1,8 +1,6 @@
 package main
 
 import (
-	"io"
-
 	"net/http"
 
 	"golang.org/x/net/context"
@@ -28,7 +26,7 @@ func (x *example4) Query(r *http.Request) (*mapper.Query, error) {
 }
 
 // Next processes the next item
-func (x *example4) Next(c context.Context, w io.Writer, counters mapper.Counters, key *datastore.Key) error {
+func (x *example4) Next(c context.Context, counters mapper.Counters, key *datastore.Key) error {
 	return nil
 }
 

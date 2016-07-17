@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"time"
 
 	"net/http"
@@ -66,7 +65,7 @@ func (x *example3) Query(r *http.Request) (*mapper.Query, error) {
 }
 
 // Next processes the next item
-func (x *example3) Next(c context.Context, w io.Writer, counters mapper.Counters, key *datastore.Key) error {
+func (x *example3) Next(c context.Context, counters mapper.Counters, key *datastore.Key) error {
 	photo := new(Photo)
 	if err := nds.Get(c, key, photo); err != nil {
 		log.Errorf(c, err.Error())

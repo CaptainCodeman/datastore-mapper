@@ -1,8 +1,6 @@
 package main
 
 import (
-	"io"
-
 	"net/http"
 
 	"github.com/qedus/nds"
@@ -28,7 +26,7 @@ func (x *example1) Query(r *http.Request) (*mapper.Query, error) {
 }
 
 // Next processes the next item
-func (x *example1) Next(c context.Context, w io.Writer, counters mapper.Counters, key *datastore.Key) error {
+func (x *example1) Next(c context.Context, counters mapper.Counters, key *datastore.Key) error {
 	// we need to load the entity ourselves
 	photo := new(Photo)
 	if err := nds.Get(c, key, photo); err != nil {
