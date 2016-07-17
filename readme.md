@@ -47,25 +47,28 @@ Or, to use memcache again:
     mapper.UseMemcached()
 
 ## Mapper Jobs
-Mapper Jobs are defined by creating a Go struct that implements the `jobSpec` interface
-used to parse request parameters and create the datastore query spec:
+Mapper Jobs are defined by creating a Go struct that implements the `JobSpec` interface.
+This defined the `Query` function used to parse request parameters and create the datastore
+query spec:
 
     Query(r *http.Request) (*Query, error)
 
-Plus, one of the processing interfaces depending on whether you want to process the entities
-individually or in batches:
+Plus, the function that will be called by the mapper as the datastore is iterated:
 
-    Next(c context.Context, w io.Writer, counters Counters, key *datastore.Key) error
-    NextBatch(c context.Context, w io.Writer, counters Counters, keys []*datastore.Key) error
+    Next(c context.Context, counters Counters, key *datastore.Key) error
 
-Processing is currently 'keys only' but performance with go batching is very good and gives
-the benefit of reducing cost but I have plans to provide a way to query and pass entities
-straight from the datastore.
+The datastore will use a 'keys only' query but this can be changed to fetching the full
+entities by imeplementing the `JobEntity` interface to return the entity to load into (which
+should be stored as a named field of the job):
 
-If using the Cloud Storage feature to export the `io.writer` can be used to serialize entities
-in whatever format is desired (JSON works great for BigQuery). If no bucket is defined when
-starting a job then any output written to the writer will be discarded.  
+    Make() interface{}
 
+To make it easy to output to Cloud Storage a job can implement `JobOutput` which provides
+an `io.writer` for the slice being processed. The job can create whatever encoder it needs
+to write it's output (JSON works great for BigQuery):
+
+    Output(w io.Writer)
+ 
 There are additional interfaces that can be implemented to receive notification of various
 lifecycle events:
 
@@ -74,7 +77,14 @@ lifecycle events:
 * Shard Started/Completed
 * Slice Started/Completed
 
-See the [/example/log_photos.go](/example/log_photos.go) file for an example. 
+See the [/example/](/example/) folder for some examples of the various job types:
+
+example1: simple keysonly iteration and aggregation using counters
+example2: simple eager iteration and aggregation using counters
+example3: parse request parameters to create query or use defaults for CRON job
+example4: lifecycle notifications
+example5: export custom JSON to Cloud Storage (for batch import into BigQuery)
+example6: streaming inserts into BigQuery
 
 ### Local Development
 The example application will run locally but needs a `service-account.json` credentials
@@ -92,7 +102,7 @@ passing the name of the job spec and optionally:
 
 Example:
 
-    http://localhost:8080/_ah/mapper/start?name=main.photoLogger&shards=8&bucket=staging.[my-app].appspot.com
+    http://localhost:8080/_ah/mapper/start?name=main.example1&shards=8&bucket=staging.[my-app].appspot.com
 
 ## Why only the mapper?
 Technology moves on and Google's cloud platform now provides other services that handle
@@ -220,7 +230,9 @@ Your job functions will be called at the appropriate points to perform whatever 
 they need to.
 
 ## Output
-For simple aggregation operations the inbuilt counter can be used.
+For simple aggregation operations the inbuilt counter object can be used but be aware
+that it is serialised and stored in the datastore entities of the mapper so the number
+of entries should be limited.
 
 Although I have no plans to build in any shuffle or reduce steps, I wanted to provide
 an easy way to write data to cloud storage (a primary use-case will be exporting data
