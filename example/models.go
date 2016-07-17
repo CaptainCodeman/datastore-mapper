@@ -19,5 +19,6 @@ type (
 		Width        int          `json:"width"        datastore:"width,noindex"`
 		Height       int          `json:"height"       datastore:"height,noindex"`
 		Taken        time.Time    `json:"taken"        datastore:"taken"`
+		TakenDay     time.Time    `json:"-"            datastore:"taken_day"` // to allow sharding on date with scatter
 	}
 )

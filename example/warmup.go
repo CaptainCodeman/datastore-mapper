@@ -59,10 +59,11 @@ func warmupHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// this will generate some random data
+// on production this will create 96,768 entitied
 func createInNamespace(c context.Context, namespace string) {
 	c, _ = appengine.Namespace(c, namespace)
 
-	// create some dummy data
 	for m := 1; m <= 12; m++ {
 		for d := 1; d <= 28; d++ {
 			taken := time.Date(2015, time.Month(m), d, 0, 0, 0, 0, time.UTC)
@@ -71,6 +72,9 @@ func createInNamespace(c context.Context, namespace string) {
 	}
 }
 
+// this will generate some random data for the given day
+// 24 * 12 on appengine (288)
+// 24 only on development
 func generateRandom(c context.Context, day time.Time) error {
 	var x int
 	if appengine.IsDevAppServer() {
@@ -83,6 +87,7 @@ func generateRandom(c context.Context, day time.Time) error {
 
 	id := 0
 	for h := 0; h < 24; h++ {
+		taken := day.Add(time.Duration(h) * time.Hour)
 		for i := 0; i < x; i++ {
 			photographer := photographers[rand.Int31n(4)]
 			photos[id] = &Photo{
@@ -90,7 +95,8 @@ func generateRandom(c context.Context, day time.Time) error {
 				Uploaded:     time.Now().UTC(),
 				Width:        8000,
 				Height:       6000,
-				Taken:        day,
+				Taken:        taken,
+				TakenDay:     day,
 			}
 			keys[id] = datastore.NewIncompleteKey(c, "photo", nil)
 			id++

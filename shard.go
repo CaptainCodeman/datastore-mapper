@@ -1,13 +1,11 @@
 package mapper
 
 import (
-	"bytes"
 	"io"
 	"strconv"
 	"strings"
 	"time"
 
-	"encoding/gob"
 	"io/ioutil"
 
 	"golang.org/x/net/context"
@@ -37,9 +35,6 @@ type (
 		// Description is the description for this shard
 		Description string `datastore:"description,noindex"`
 
-		// KeyRange is the keyrange for this shard
-		KeyRange *KeyRange `datastore:"-"`
-
 		// Cursor is the datastore cursor to start from
 		Cursor string `datastore:"cursor,noindex"`
 
@@ -61,7 +56,7 @@ func (s *shard) copyFrom(x shard) {
 	s.Shard = x.Shard
 	s.Namespace = x.Namespace
 	s.Description = x.Description
-	s.KeyRange = x.KeyRange
+	s.Query = x.Query
 	s.Cursor = x.Cursor
 }
 
@@ -101,52 +96,12 @@ func (s *shard) sliceFilename(slice int) string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + "/" + strconv.Itoa(slice) + ".json"
 }
 
-func (s *shard) createQuery(c context.Context) *datastore.Query {
-	q := s.job.Query.toDatastoreQuery()
-	return q
-}
-
 func (s *shard) iterate(c context.Context) (bool, error) {
 	// switch namespace
 	c, _ = appengine.Namespace(c, s.Namespace)
 
 	// use the full 10 minutes allowed (assuming front-end instance type)
 	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
-
-	size := int(s.job.Query.limit)
-	if size == 0 {
-		size = 100
-	}
-
-	q := s.createQuery(c)
-	q = s.KeyRange.FilterQuery(q)
-	q = q.Limit(size)
-
-	var cursor *datastore.Cursor
-	if s.Cursor != "" {
-		newCursor, err := datastore.DecodeCursor(s.Cursor)
-		if err != nil {
-			log.Errorf(c, "get start cursor error %s", err.Error())
-			return false, err
-		}
-		cursor = &newCursor
-	}
-
-	// we query and proecess in batches of 'size' and also create a
-	// timeout signal that is checked after each batch. So, a batch has
-	// to take less than 5 minutes to execute
-	timeout := make(chan bool, 1)
-	timer := time.AfterFunc(time.Duration(5)*time.Minute, func() {
-		timeout <- true
-	})
-	defer timer.Stop()
-
-	// TODO: check one of these is enabled when job is started
-	single, useSingle := s.job.Job.(JobSingle)
-	batch, useBatch := s.job.Job.(JobBatched)
-	if useSingle && useBatch {
-		useSingle = false
-	}
 
 	// if job has output defined then create writer for it
 	var w io.Writer
@@ -189,6 +144,45 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 		w = o
 	}
 
+	q := datastore.NewQuery(s.Query.kind)
+	for _, f := range s.Query.filter {
+		q = q.Filter(f.FieldName+" "+operatorToString[f.Op], f.Value)
+	}
+
+	var cursor *datastore.Cursor
+	if s.Cursor != "" {
+		newCursor, err := datastore.DecodeCursor(s.Cursor)
+		if err != nil {
+			log.Errorf(c, "get start cursor error %s", err.Error())
+			return false, err
+		}
+		cursor = &newCursor
+	}
+
+	// we query and proecess in batches of 'size' and also create a
+	// timeout signal that is checked after each batch. So, a batch has
+	// to take less than 5 minutes to execute
+	timeout := make(chan bool, 1)
+	timer := time.AfterFunc(time.Duration(5)*time.Minute, func() {
+		timeout <- true
+	})
+	defer timer.Stop()
+
+	// what we'll load into if doing full entity loads (i.e. not doing KeysOnly)
+	var entity interface{}
+
+	// is full loading implemented?
+	jobEntity, useJobEntity := s.jobSpec.(JobEntity)
+	if useJobEntity {
+		entity = jobEntity.Make()
+	} else {
+		q = q.KeysOnly()
+	}
+
+	// chunk size (make a parameter?)
+	size := 1000
+	q = q.Limit(size)
+
 	for {
 		count := 0
 
@@ -197,9 +191,8 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 		}
 
 		it := q.Run(c)
-		keys := make([]*datastore.Key, 0, size)
 		for {
-			key, err := it.Next(nil)
+			key, err := it.Next(entity)
 			if err == datastore.Done {
 				break
 			}
@@ -208,24 +201,12 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 				return false, err
 			}
 
-			if useSingle {
-				// TODO: check for return errors
-				single.Next(c, w, s.Counters, key)
-				s.Count++
-			} else {
-				keys = append(keys, key)
-			}
+			s.jobSpec.Next(c, w, s.Counters, key)
+			s.Count++
 
 			count++
 		}
 
-		if useBatch {
-			// TODO: check for return errors
-			batch.NextBatch(c, w, s.Counters, keys)
-			s.Count += int64(len(keys))
-		}
-
-		// did we process a full batch? if not, we hit the end of the dataset
 		if count < size {
 			return true, nil
 		}
@@ -355,19 +336,6 @@ func (s *shard) Load(props []datastore.Property) error {
 	datastore.LoadStruct(s, props)
 	s.common.Load(props)
 	s.lock.Load(props)
-
-	for _, prop := range props {
-		switch prop.Name {
-		case "key_range":
-			s.KeyRange = &KeyRange{}
-			payload := bytes.NewBuffer(prop.Value.([]byte))
-			enc := gob.NewDecoder(payload)
-			if err := enc.Decode(&s.KeyRange); err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -386,13 +354,6 @@ func (s *shard) Save() ([]datastore.Property, error) {
 		return nil, err
 	}
 	props = append(props, lprops...)
-
-	payload := new(bytes.Buffer)
-	enc := gob.NewEncoder(payload)
-	if err := enc.Encode(&s.KeyRange); err != nil {
-		return nil, err
-	}
-	props = append(props, datastore.Property{Name: "key_range", Value: payload.Bytes(), NoIndex: true, Multiple: false})
 
 	return props, err
 }

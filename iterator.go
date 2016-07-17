@@ -61,8 +61,10 @@ func (it *iterator) process(c context.Context, config Config) error {
 	id := fmt.Sprintf("%s-%s", it.id, it.Namespace)
 	key := datastore.NewKey(c, config.DatastorePrefix+namespaceKind, id, 0, nil)
 
+	q := it.Query.Namespace(it.Namespace)
+
 	ns := new(namespace)
-	ns.start()
+	ns.start(q)
 	ns.Namespace = it.Namespace
 
 	return ScheduleLock(c, key, ns, config.Path+namespaceURL, nil, it.queue)
@@ -85,8 +87,8 @@ func (it *iterator) iterate(c context.Context, config Config) (bool, error) {
 	// if the query defines the specific namespaces to process then we
 	// don't really need to query for them - we can just process that
 	// list immediately
-	if len(it.job.Query.namespace) > 0 {
-		for _, namespace := range it.job.Query.namespace {
+	if len(it.Query.namespaces) > 0 {
+		for _, namespace := range it.Query.namespaces {
 			it.Namespace = namespace
 			it.process(c, config)
 		}

@@ -47,7 +47,7 @@ Or, to use memcache again:
     mapper.UseMemcached()
 
 ## Mapper Jobs
-Mapper Jobs are defined by creating a Go struct that implements the `JobSpec` interface
+Mapper Jobs are defined by creating a Go struct that implements the `jobSpec` interface
 used to parse request parameters and create the datastore query spec:
 
     Query(r *http.Request) (*Query, error)

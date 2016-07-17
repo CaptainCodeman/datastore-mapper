@@ -15,31 +15,31 @@ import (
 )
 
 type (
-	// JobSpec is the interface that any mapreduce job struct needs to implement
-	// Each job needs to be registered using RegisterJob
+	// JobSpec is the interface use by the mapper to create the datastore query spec
 	JobSpec interface {
-		// Query creates the datastore query to define the entities that the job
-		// should process. It is called when a new job is being started and passed
-		// the request in order to extract any parameters that may be required
+		// Query creates the datastore query spec to define the entities that the job
+		// should process. It is called when a new job is being initiated and passed
+		// the request in order to extract any parameters from it that may be required
 		Query(r *http.Request) (*Query, error)
-	}
-
-	// JobSingle is the interface that any mapper job struct needs to implement
-	// for single item processing.
-	JobSingle interface {
-		// Next will be called to process each key in turn
 		Next(c context.Context, w io.Writer, counters Counters, key *datastore.Key) error
 	}
 
-	// JobBatched is the interface that any mapper job struct needs to implement
-	// for batch item processing.
-	JobBatched interface {
-		// NextBatch will be called to process each batch of keys in turn
-		NextBatch(c context.Context, w io.Writer, counters Counters, keys []*datastore.Key) error
+	// JobEntity is the interface that a mapper job should implement if it wants
+	// to map directly over datastore entities. i.e. *not* use a KeysOnly query.
+	// Implementing this interface will cause a full entity query to be performed and
+	// the entity will be loaded into whatever this function returns which should be a
+	// named field within the job struct.
+	// It will be called once at the beginning of any slice processing and the field
+	// will not live beyond the slice lifetime.
+	JobEntity interface {
+		Make() interface{}
 	}
 
+	// TODO: batch processing of keys (for GetMulti within job)
+
 	// JobLifecycle is the interface that any mapper job struct can implement to
-	// be notified of job lifecycle events
+	// be notified of job lifecycle events. Use this if you want to perform any actions
+	// at the beginning and / or end of a job.
 	JobLifecycle interface {
 		// JobStarted is called when a mapper job is started
 		JobStarted(c context.Context, id string)
@@ -49,7 +49,8 @@ type (
 	}
 
 	// NamespaceLifecycle is the interface that any mapper job struct can implement to
-	// be notified of namespace lifecycle events
+	// be notified of namespace lifecycle events. Use this is you want to perform any
+	// actions at the beginning and / or end of processing for each namespace.
 	NamespaceLifecycle interface {
 		// NamespaceStarted is called when a mapper job for an individual
 		// namespace is started
@@ -61,7 +62,8 @@ type (
 	}
 
 	// ShardLifecycle is the interface that any mapper job struct can implement to
-	// be notified of shard lifecycle events
+	// be notified of shard lifecycle events. Use this is you want to perform any
+	// actions at the beginning and / or end of processing for each shard.
 	ShardLifecycle interface {
 		// ShardStarted is called when a mapper job for an individual
 		// shard within a namespace is started
@@ -73,7 +75,8 @@ type (
 	}
 
 	// SliceLifecycle is the interface that any mapper job struct can implement to
-	// be notified of slice lifecycle events
+	// be notified of slice lifecycle events. Use this is you want to perform any
+	// actions at the beginning and / or end of processing for each slice.
 	SliceLifecycle interface {
 		// SliceStarted is called when a mapper job for an individual slice of a
 		// shard within a namespace is started
@@ -127,13 +130,12 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	id := fmt.Sprintf("%s-%s", strings.Replace(name, ".", "", 1), requestHash)
 	job := &job{
-		Job:       jobSpec,
-		Query:     query,
+		JobName:   name,
 		Bucket:    bucket,
 		Shards:    shards,
 		Iterating: true,
 	}
-	job.common.start()
+	job.common.start(query)
 
 	key := datastore.NewKey(c, m.config.DatastorePrefix+jobKind, id, 0, nil)
 	ScheduleLock(c, key, job, m.config.Path+jobURL, nil, queue)

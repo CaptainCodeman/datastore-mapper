@@ -142,11 +142,15 @@ func TestSplitString(t *testing.T) {
 	setupConstants("abc", 3)
 	/*
 		The limited character set and length helps make the ordinal string ordering clearer,
-		there are 40 different strings in the set - 1 (empty) + 13 x 3 combinations:
+		there are 40 different strings in the set - 1 (empty) + 3 x 13 combinations:
+
 		"",
 		"a", "aa", "aaa", "aab", "aac", "ab", "aba", "abb", "abc", "ac", "aca", "acb", "acc",
 		"b", "ba", "baa", "bab", "bac", "bb", "bba", "bbb", "bbc", "bc", "bca", "bcb", "bcc",
-		"c", "ca", "caa", "cab", "cac", "cb", "cba", "cbb", "cbc", "cc", "cca", "ccb", "ccc",
+		"c", "ca", "caa", "cab", "cac", "cb", "cba", "cbb", "cbc", "cc", "cca", "ccb", "ccc"
+
+		... so divide 40 by the number of shards and pick every nth entry for the result.
+		e.g. for 4 shards we would pick every 10th entry: "", "abc", "bb", "caa", "ccc"
 	*/
 	tests := []struct {
 		start    string

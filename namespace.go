@@ -2,8 +2,6 @@ package mapper
 
 import (
 	"fmt"
-	"math"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -37,6 +35,9 @@ type (
 
 		// ShardsFailed is the number of shards failed
 		ShardsFailed int `datastore:"shards_failed,noindex"`
+
+		// Query is the datastore query for this namespace
+		Query *Query `datastore:"-"`
 
 		job *job
 	}
@@ -91,90 +92,46 @@ func (n *namespace) shardFilename(shard int) string {
 }
 
 func (n *namespace) split(c context.Context, config Config) error {
-	keyRanges := []*KeyRange{}
-
-	// TODO: split query on more than just key range, include any property filters
-	// TODO: store query on shard instead of KeyRange and use that for processing
-
-	if n.job.Shards == 1 {
-		keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, nil, Ascending, false))
-	} else {
-		ns, _ := appengine.Namespace(c, n.Namespace)
-		minimumShards := n.job.Shards
-		oversamplingFactor := config.Oversampling
-		limit := minimumShards * oversamplingFactor
-
-		q := n.job.Query.toDatastoreQuery()
-		q = q.Order("__scatter__")
-		q = q.Limit(limit)
-		q = q.KeysOnly()
-
-		randomKeys, err := q.GetAll(ns, nil)
-		if err != nil {
-			log.Errorf(c, "error %s", err.Error())
-		}
-		if len(randomKeys) == 0 {
-			log.Errorf(c, "no keys")
-			// There are no entities with scatter property. We have no idea how to split.
-
-			// TODO: split property key
-			keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, nil, Ascending, true))
-		} else {
-			// this assumes that all the keys are consistently int or string (reasonable)
-			if randomKeys[0].IntID() > 0 {
-				sort.Sort(byIntKey(randomKeys))
-			} else {
-				sort.Sort(byStringKey(randomKeys))
-			}
-
-			log.Debugf(c, "splits %d", len(randomKeys))
-			// TODO: use the number of random keys to do a rough approximation of the
-			// minimum size of the table. A scatter property is added roughly once every
-			// 512 records (although the wiki says 0.78% chance which is more like 128)
-			// When the number of random keys is below some threshold, reduce the number
-			// of shards accordingly so we're not burning tasks for trivial numbers of
-			// records - some namespaces may only need a single task to process
-
-			if len(randomKeys) > minimumShards {
-				randomKeys, _ = n.chooseSplitPoints(randomKeys, minimumShards)
-			}
-
-			keyRanges = append(keyRanges, newKeyRange(n.Namespace, nil, randomKeys[0], Ascending, false))
-			for i := 0; i < len(randomKeys)-1; i++ {
-				keyRanges = append(keyRanges, newKeyRange(n.Namespace, randomKeys[i], randomKeys[i+1], Ascending, true))
-			}
-			keyRanges = append(keyRanges, newKeyRange(n.Namespace, randomKeys[len(randomKeys)-1], nil, Ascending, true))
-		}
+	queries, err := n.Query.split(c, n.job.Shards, config.Oversampling)
+	if err != nil {
+		return err
 	}
 
-	n.ShardsTotal = len(keyRanges)
+	n.ShardsTotal = len(queries)
 
+	// from original source:
 	// Even though this method does not schedule shard task and save shard state
 	// transactionally, it's safe for taskqueue to retry this logic because
 	// the initial shard_state for each shard is the same from any retry.
 	// This is an important yet reasonable assumption on shard.
 
-	keys := make([]*datastore.Key, len(keyRanges))
-	for shardNumber := 0; shardNumber < len(keyRanges); shardNumber++ {
-		id := fmt.Sprintf("%s-%d", n.id, shardNumber)
+	// I'm not so sure - it feels like the query splitting could easily return
+	// a different set of values unless the datastore is in read-only mode ...
+	// so maybe have one task to split the query, then another (that can be
+	// repeated) which does the shard scheduling ...
+
+	keys := make([]*datastore.Key, n.ShardsTotal)
+	for i := 0; i < n.ShardsTotal; i++ {
+		id := fmt.Sprintf("%s-%d", n.id, i)
 		key := datastore.NewKey(c, config.DatastorePrefix+shardKind, id, 0, nil)
-		keys[shardNumber] = key
+		keys[i] = key
 	}
 
-	shards := make([]*shard, len(keyRanges))
+	shards := make([]*shard, n.ShardsTotal)
 	if err := storage.GetMulti(c, keys, shards); err != nil {
 		if me, ok := err.(appengine.MultiError); ok {
-			for shardNumber, merr := range me {
+			for i, merr := range me {
 				if merr == datastore.ErrNoSuchEntity {
-					// keys[shardNumber] is missing, create the shard for it
-					k := keys[shardNumber]
+					// keys[i] is missing, create the shard for it
+					k := keys[i]
+
+					q := queries[i].Namespace(n.Namespace)
 
 					s := new(shard)
-					s.start()
-					s.Shard = shardNumber
+					s.start(q)
+					s.Shard = i
 					s.Namespace = n.Namespace
-					s.KeyRange = keyRanges[shardNumber]
-					s.Description = keyRanges[shardNumber].String()
+					s.Description = q.String()
 
 					if err := ScheduleLock(c, k, s, config.Path+shardURL, nil, n.queue); err != nil {
 						return err
@@ -256,21 +213,6 @@ func (n *namespace) completed(c context.Context, config Config, key *datastore.K
 	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
 }
 
-// Returns the best split points given a random set of datastore.Keys
-func (n *namespace) chooseSplitPoints(sortedKeys []*datastore.Key, shardCount int) ([]*datastore.Key, error) {
-	indexStride := float64(len(sortedKeys)) / float64(shardCount)
-	if indexStride < 1 {
-		return nil, fmt.Errorf("not enough keys")
-	}
-	results := make([]*datastore.Key, 0, shardCount)
-	for i := 1; i < shardCount; i++ {
-		idx := int(math.Floor(indexStride*float64(i) + 0.5))
-		results = append(results, sortedKeys[idx])
-	}
-
-	return results, nil
-}
-
 // rollup shards into single namespace file
 func (n *namespace) rollup(c context.Context) error {
 	// nothing to do if no output writing
@@ -341,6 +283,17 @@ func (n *namespace) Load(props []datastore.Property) error {
 	datastore.LoadStruct(n, props)
 	n.common.Load(props)
 	n.lock.Load(props)
+
+	for _, prop := range props {
+		switch prop.Name {
+		case "query":
+			n.Query = &Query{}
+			if err := n.Query.GobDecode(prop.Value.([]byte)); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 

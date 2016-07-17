@@ -40,6 +40,8 @@ type (
 
 // newConfig creates a new config with default values
 func newConfig() *Config {
+	// TODO: use config as default, allow setting some values per-job
+	// and prevent config changes affecting already-running tasks
 	return &Config{
 		Path:            DefaultPath,
 		DatastorePrefix: "MP_",

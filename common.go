@@ -8,12 +8,12 @@ import (
 )
 
 type (
+	// taskable (urgh, horrible name) is anything that can
+	// be run as a task. It's basically all our datastore models
+	// and used to set the private common values (context?)
 	taskable interface {
-		getID() string
-		setID(id string)
-
-		getQueue() string
-		setQueue(queue string)
+		getCommon() *common
+		setCommon(id string, jobSpec JobSpec, queue string)
 	}
 
 	// common contains properties that are common across all
@@ -21,6 +21,9 @@ type (
 	common struct {
 		// Counters holds the task counters map
 		Counters Counters `datastore:"-"`
+
+		// Query is the datastore query spec
+		Query *Query `datastore:"-"`
 
 		// Active indicates if this task is still active
 		Active bool `datastore:"active,noindex"`
@@ -43,27 +46,25 @@ type (
 		// private fields used by local instance
 		id        string
 		queue     string
+		jobSpec   JobSpec
 		startTime time.Time
 	}
 )
 
-func (c *common) getID() string {
-	return c.id
-}
-func (c *common) setID(id string) {
-	c.id = id
+func (c *common) getCommon() *common {
+	return c
 }
 
-func (c *common) getQueue() string {
-	return c.queue
-}
-func (c *common) setQueue(queue string) {
+func (c *common) setCommon(id string, jobSpec JobSpec, queue string) {
+	c.id = id
+	c.jobSpec = jobSpec
 	c.queue = queue
 }
 
-func (c *common) start() {
+func (c *common) start(query *Query) {
 	c.Active = true
 	c.Counters = NewCounters()
+	c.Query = query
 	c.Count = 0
 	c.Started = getTime()
 	c.Updated = c.Started
@@ -88,9 +89,17 @@ func (c *common) Load(props []datastore.Property) error {
 
 	c.Counters = make(map[string]int64)
 	for _, prop := range props {
-		if strings.HasPrefix(prop.Name, "counters.") {
-			key := prop.Name[9:len(prop.Name)]
-			c.Counters[key] = prop.Value.(int64)
+		switch prop.Name {
+		case "query":
+			c.Query = &Query{}
+			if err := c.Query.GobDecode(prop.Value.([]byte)); err != nil {
+				return err
+			}
+		default:
+			if strings.HasPrefix(prop.Name, "counters.") {
+				key := prop.Name[9:len(prop.Name)]
+				c.Counters[key] = prop.Value.(int64)
+			}
 		}
 	}
 
@@ -110,6 +119,12 @@ func (c *common) Save() ([]datastore.Property, error) {
 	for key, value := range c.Counters {
 		props = append(props, datastore.Property{Name: "counters." + key, Value: value, NoIndex: true, Multiple: false})
 	}
+
+	b, err := c.Query.GobEncode()
+	if err != nil {
+		return nil, err
+	}
+	props = append(props, datastore.Property{Name: "query", Value: b, NoIndex: true, Multiple: false})
 
 	return props, nil
 }

@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 
 	"encoding/gob"
 	"encoding/json"
-
-	"google.golang.org/appengine/datastore"
 )
 
 type (
@@ -18,12 +15,11 @@ type (
 	// with only the mapper supported query features provided and
 	// the addition ability to specify namespaces
 	Query struct {
-		namespace []string
-		kind      string
-		filter    []filter
-		keysOnly  bool
-		limit     int32
-		err       error
+		namespaces []string
+		kind       string
+		filter     []filter
+		keysOnly   bool
+		err        error
 	}
 
 	// filter is a conditional filter on query results.
@@ -65,10 +61,17 @@ func NewQuery(kind string) *Query {
 	}
 }
 
-// Namespace returns a derivative query with a namespace-based filter.
+// Namespace returns a derivative query with a single namespace
 func (q *Query) Namespace(namespace string) *Query {
 	q = q.clone()
-	q.namespace = append(q.namespace, namespace)
+	q.namespaces = []string{namespace}
+	return q
+}
+
+// Namespaces returns a derivative query with a collection of namespaces
+func (q *Query) Namespaces(namespaces []string) *Query {
+	q = q.clone()
+	q.namespaces = append(q.namespaces, namespaces...)
 	return q
 }
 
@@ -115,24 +118,12 @@ func (q *Query) Filter(filterStr string, value interface{}) *Query {
 	return q
 }
 
-// Limit returns a derivative query that has a limit on the number of results
-// returned. A negative value means unlimited.
-func (q *Query) Limit(limit int) *Query {
-	q = q.clone()
-	if limit < math.MinInt32 || limit > math.MaxInt32 {
-		q.err = errors.New("datastore: query limit overflow")
-		return q
-	}
-	q.limit = int32(limit)
-	return q
-}
-
 func (q *Query) clone() *Query {
 	x := *q
 	// Copy the contents of the slice-typed fields to a new backing store.
-	if len(q.namespace) > 0 {
-		x.namespace = make([]string, len(q.namespace))
-		copy(x.namespace, q.namespace)
+	if len(q.namespaces) > 0 {
+		x.namespaces = make([]string, len(q.namespaces))
+		copy(x.namespaces, q.namespaces)
 	}
 	if len(q.filter) > 0 {
 		x.filter = make([]filter, len(q.filter))
@@ -141,61 +132,23 @@ func (q *Query) clone() *Query {
 	return &x
 }
 
-// String returns a string representatin of the query for display purposes only
+// String returns a string representation of the query for display purposes only
 func (q *Query) String() string {
-	// TODO
-	return ""
+	str := fmt.Sprintf("kind:%s namespace(s):%s (%d)", q.kind, strings.Join(q.namespaces, ","), len(q.namespaces))
+	for _, f := range q.filter {
+		str += fmt.Sprintf(" filter:%s", f.String())
+	}
+	return str
 }
 
 func (f *filter) String() string {
-	var op string
-	switch f.Op {
-	case lessEq:
-		op = "<="
-	case greaterEq:
-		op = ">="
-	case lessThan:
-		op = "<"
-	case greaterThan:
-		op = ">"
-	case equal:
-		op = "="
-	default:
-		op = "?"
-	}
-	return fmt.Sprintf("%s %s %s", f.FieldName, op, f.Value)
-}
-
-func (q *Query) toDatastoreQuery() *datastore.Query {
-	dq := datastore.NewQuery(q.kind)
-	for _, f := range q.filter {
-		var op string
-		switch f.Op {
-		case lessEq:
-			op = "<="
-		case greaterEq:
-			op = ">="
-		case lessThan:
-			op = "<"
-		case greaterThan:
-			op = ">"
-		case equal:
-			op = "="
-		default:
-			op = "?"
-		}
-		dq = dq.Filter(f.FieldName+" "+op, f.Value)
-	}
-	if q.keysOnly {
-		dq = dq.KeysOnly()
-	}
-	return dq
+	return fmt.Sprintf("%s %s %v", f.FieldName, operatorToString[f.Op], f.Value)
 }
 
 func (q *Query) GobEncode() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
-	if err := enc.Encode(q.namespace); err != nil {
+	if err := enc.Encode(q.namespaces); err != nil {
 		return nil, err
 	}
 	if err := enc.Encode(q.kind); err != nil {
@@ -213,7 +166,7 @@ func (q *Query) GobEncode() ([]byte, error) {
 func (q *Query) GobDecode(b []byte) error {
 	buf := bytes.NewBuffer(b)
 	dec := gob.NewDecoder(buf)
-	if err := dec.Decode(&q.namespace); err != nil {
+	if err := dec.Decode(&q.namespaces); err != nil {
 		return err
 	}
 	if err := dec.Decode(&q.kind); err != nil {
@@ -230,41 +183,26 @@ func (q *Query) GobDecode(b []byte) error {
 
 func (q *Query) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
-		Namespace []string `json:"namespace"`
-		Kind      string   `json:"kind"`
-		Filter    []filter `json:"filter"`
-		KeysOnly  bool     `json:"keys_only"`
+		Namespaces []string `json:"namespaces"`
+		Kind       string   `json:"kind"`
+		Filter     []filter `json:"filter"`
+		KeysOnly   bool     `json:"keys_only"`
 	}{
-		Namespace: q.namespace,
-		Kind:      q.kind,
-		Filter:    q.filter,
-		KeysOnly:  q.keysOnly,
+		Namespaces: q.namespaces,
+		Kind:       q.kind,
+		Filter:     q.filter,
+		KeysOnly:   q.keysOnly,
 	})
 }
 
 func (f *filter) MarshalJSON() ([]byte, error) {
-	var op string
-	switch f.Op {
-	case lessEq:
-		op = "<="
-	case greaterEq:
-		op = ">="
-	case lessThan:
-		op = "<"
-	case greaterThan:
-		op = ">"
-	case equal:
-		op = "="
-	default:
-		op = "?"
-	}
 	return json.Marshal(&struct {
 		Field string      `json:"field"`
 		Op    string      `json:"operator"`
 		Value interface{} `json:"value"`
 	}{
 		Field: f.FieldName,
-		Op:    op,
+		Op:    operatorToString[f.Op],
 		Value: f.Value,
 	})
 }

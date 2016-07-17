@@ -89,13 +89,12 @@ func (m *mapper) handleTask(path, kind string, handler taskHandler) {
 			return
 		}
 
-		entity.setID(id)
-		entity.setQueue(queue)
+		entity.setCommon(id, nil, queue)
 
 		// determine if we're a job task (so have already loaded the job)
 		// or a sub task (in which case we need to load it) so that we can
 		// abort if the flag has been set or set the job so that the handler
-		// can access the JobSpec and Query (should we pass though through?)
+		// can access the jobSpec and Query (should we pass though through?)
 		var j *job
 		sub, isSub := entity.(subTask)
 		if isSub {
@@ -129,12 +128,26 @@ func (m *mapper) handleTask(path, kind string, handler taskHandler) {
 			return
 		}
 
+		jobSpec, err := CreateJobInstance(j.JobName)
+		if err != nil {
+			log.Errorf(c, "error creating job instance %s", err.Error)
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, err.Error())
+			ClearLock(c, key, false)
+			return
+		}
+
+		entity.setCommon(id, jobSpec, queue)
+
+		common := entity.getCommon()
+		log.Infof(c, "query: %s", common.Query)
+
 		// call the actual handler
 		if m.config.LogVerbose {
 			log.Infof(c, "calling handler")
 		}
 		if err := handler(c, *m.config, key, entity); err != nil {
-			log.Errorf(c, "task error %s", err.Error)
+			log.Errorf(c, "task error %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprintf(w, err.Error())
 			ClearLock(c, key, false)

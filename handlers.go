@@ -39,7 +39,7 @@ func (m *mapper) jobHandler(c context.Context, config Config, key *datastore.Key
 		return fmt.Errorf("expected job")
 	}
 
-	jobLifecycle, useJobLifecycle := j.Job.(JobLifecycle)
+	jobLifecycle, useJobLifecycle := j.jobSpec.(JobLifecycle)
 	if useJobLifecycle && j.Sequence == 1 {
 		jobLifecycle.JobStarted(c, "id")
 	}
@@ -64,7 +64,7 @@ func (m *mapper) jobCompleteHandler(c context.Context, config Config, key *datas
 		return err
 	}
 
-	jobLifecycle, useJobLifecycle := j.Job.(JobLifecycle)
+	jobLifecycle, useJobLifecycle := j.jobSpec.(JobLifecycle)
 	if useJobLifecycle {
 		jobLifecycle.JobCompleted(c, "id")
 	}
@@ -118,7 +118,7 @@ func (m *mapper) namespaceHandler(c context.Context, config Config, key *datasto
 		return fmt.Errorf("expected namespace")
 	}
 
-	namespaceLifecycle, useNamespaceLifecycle := ns.job.Job.(NamespaceLifecycle)
+	namespaceLifecycle, useNamespaceLifecycle := ns.jobSpec.(NamespaceLifecycle)
 	if useNamespaceLifecycle && ns.Sequence == 1 {
 		namespaceLifecycle.NamespaceStarted(c, "id", "namespace")
 	}
@@ -149,7 +149,7 @@ func (m *mapper) namespaceCompleteHandler(c context.Context, config Config, key 
 		return err
 	}
 
-	namespaceLifecycle, useNamespaceLifecycle := ns.job.Job.(NamespaceLifecycle)
+	namespaceLifecycle, useNamespaceLifecycle := ns.jobSpec.(NamespaceLifecycle)
 	if useNamespaceLifecycle {
 		namespaceLifecycle.NamespaceCompleted(c, "id", "namespace")
 	}
@@ -166,12 +166,12 @@ func (m *mapper) shardHandler(c context.Context, config Config, key *datastore.K
 		return fmt.Errorf("expected shard")
 	}
 
-	shardLifecycle, useShardLifecycle := s.job.Job.(ShardLifecycle)
+	shardLifecycle, useShardLifecycle := s.jobSpec.(ShardLifecycle)
 	if useShardLifecycle && s.Sequence == 1 {
 		shardLifecycle.ShardStarted(c, "id", "namespace", s.Shard)
 	}
 
-	sliceLifecycle, useSliceLifecycle := s.job.Job.(SliceLifecycle)
+	sliceLifecycle, useSliceLifecycle := s.jobSpec.(SliceLifecycle)
 	if useSliceLifecycle {
 		sliceLifecycle.SliceStarted(c, "id", "namespace", s.Shard, s.Sequence)
 	}
@@ -213,7 +213,7 @@ func (m *mapper) shardCompleteHandler(c context.Context, config Config, key *dat
 		return err
 	}
 
-	shardLifecycle, useShardLifecycle := s.job.Job.(ShardLifecycle)
+	shardLifecycle, useShardLifecycle := s.jobSpec.(ShardLifecycle)
 	if useShardLifecycle {
 		shardLifecycle.ShardCompleted(c, "id", "namespace", s.Shard)
 	}

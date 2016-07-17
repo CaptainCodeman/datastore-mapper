@@ -24,14 +24,12 @@ func TestPropertyRange(t *testing.T) {
 		{NewQuery("foo").Filter("a >", old).Filter("a <=", now), false, "a", &filter{"a", greaterThan, old}, &filter{"a", lessEq, now}, []filter{}},
 		// expect the same property
 		{NewQuery("foo").Filter("a >", 1).Filter("b <", 2), true, "", nil, nil, nil},
-		// expect a range
-		{NewQuery("foo").Filter("a <=", 1), true, "", nil, nil, nil},
 		// expect a closed range
 		{NewQuery("foo").Filter("a >", 10).Filter("a <=", 2), true, "", nil, nil, nil},
 		{NewQuery("foo").Filter("a >", now).Filter("a <=", old), true, "", nil, nil, nil},
 	}
 	for i, test := range tests {
-		result, err := newPropertyRange(test.query)
+		equal, pr, err := test.query.toEqualityListAndRange()
 		/*
 			// dump output
 			if err == nil {
@@ -59,7 +57,7 @@ func TestPropertyRange(t *testing.T) {
 			continue
 		}
 
-		if result.propertyName == "" {
+		if pr.empty() {
 			if test.lower != nil {
 				t.Errorf("%d expected lower %s %s %v", i, test.lower.FieldName, operatorToString[test.lower.Op], test.lower.Value)
 			}
@@ -68,43 +66,52 @@ func TestPropertyRange(t *testing.T) {
 			}
 		} else {
 			if test.lower == nil {
-				t.Errorf("%d unexpected lower %s %s %v", i, result.lower.FieldName, operatorToString[result.lower.Op], result.lower.Value)
+				t.Errorf("%d unexpected lower %s %s %v", i, pr.lower.FieldName, operatorToString[pr.lower.Op], pr.lower.Value)
 			} else {
 				exp := test.lower
-				got := result.lower
+				got := pr.lower
 				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
 					t.Errorf("%d expected lower %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
 				}
 				exp = test.upper
-				got = result.upper
+				got = pr.upper
 				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
 					t.Errorf("%d expected upper %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
 				}
 			}
 			if test.upper == nil {
-				t.Errorf("%d unexpected lower %s %s %v", i, result.upper.FieldName, operatorToString[result.upper.Op], result.upper.Value)
+				t.Errorf("%d unexpected upper %s %s %v", i, pr.upper.FieldName, operatorToString[pr.upper.Op], pr.upper.Value)
 			} else {
-
+				exp := test.lower
+				got := pr.lower
+				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
+					t.Errorf("%d expected lower %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
+				}
+				exp = test.upper
+				got = pr.upper
+				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
+					t.Errorf("%d expected upper %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
+				}
 			}
 		}
 
-		if result.propertyName != test.property {
-			t.Errorf("%d expected property %s got %s", i, test.property, result.propertyName)
+		if pr.propertyName() != test.property {
+			t.Errorf("%d expected property %s got %s", i, test.property, pr.propertyName())
 		}
 
-		if len(result.equal) != len(test.equal) {
-			t.Errorf("%d expected %d equal, got %d", i, len(test.equal), len(result.equal))
+		if len(equal) != len(test.equal) {
+			t.Errorf("%d expected %d equal, got %d", i, len(test.equal), len(equal))
 			for j, f := range test.equal {
 				t.Errorf("%d.%d expected %s %s %v", i, j, f.FieldName, operatorToString[f.Op], f.Value)
 			}
-			for j, f := range result.equal {
+			for j, f := range equal {
 				t.Errorf("%d.%d result %s %s %v", i, j, f.FieldName, operatorToString[f.Op], f.Value)
 			}
 			continue
 		}
 
 		// compare equal values
-		for j, f := range result.equal {
+		for j, f := range equal {
 			exp := test.equal[j]
 			if f.FieldName != exp.FieldName || f.Op != exp.Op || f.Value != exp.Value {
 				t.Errorf("%d.%d expected %s %s %v, got %s %s %v", i, j, exp.FieldName, operatorToString[exp.Op], exp.Value, f.FieldName, operatorToString[f.Op], f.Value)
@@ -113,6 +120,7 @@ func TestPropertyRange(t *testing.T) {
 	}
 }
 
+/*
 func TestPropertyRangeSplit(t *testing.T) {
 	tests := []struct {
 		query  *Query
@@ -141,7 +149,7 @@ func TestPropertyRangeSplit(t *testing.T) {
 		// TODO: string, datetime
 	}
 	for i, test := range tests {
-		pr, err := newPropertyRange(test.query)
+		equal, pr, err := test.query.toEqualityListAndRange()
 		if err != nil {
 			t.Errorf("%d error %s", i, err.Error())
 			continue
@@ -152,3 +160,4 @@ func TestPropertyRangeSplit(t *testing.T) {
 		}
 	}
 }
+*/
