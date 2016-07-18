@@ -47,4 +47,3 @@ func newMapper() *mapper {
 		config:   newConfig(),
 	}
 }
-

@@ -7,7 +7,12 @@ import (
 	"net/http"
 )
 
+type (
+	apiHandler func(http.ResponseWriter, *http.Request, string) (int, interface{}, error)
+)
+
 // eventually, we want to embed and serve a nice polymer UI for the mapper
+// this just helps show that the mapper is hosted on the endpoint in the app
 func init() {
 	server.HandleFunc("/", index)
 }
@@ -54,12 +59,11 @@ type PatchSupported interface {
 	Patch(http.ResponseWriter, *http.Request, string) (int, interface{}, error)
 }
 
-func (api *mapper) requestHandler(path string, resource interface{}) http.HandlerFunc {
+func (m *mapper) requestHandler(path string, resource interface{}) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		id := r.URL.Path[len(path):]
-
-		var handler func(http.ResponseWriter, *http.Request, string) (int, interface{}, error)
+		var handler apiHandler
 
 		switch r.Method {
 		case "GET":
@@ -115,13 +119,6 @@ func (api *mapper) requestHandler(path string, resource interface{}) http.Handle
 // AddResource adds a new resource to an API. The API will route
 // requests that match one of the given paths to the matching HTTP
 // method on the resource.
-func (api *mapper) AddResource(resource interface{}, path string) {
-	api.HandleFunc(path, api.requestHandler(path, resource))
+func (m *mapper) addResource(path string, resource interface{}) {
+	m.HandleFunc(path, m.requestHandler(path, resource))
 }
-
-/*
-GET		/jobs/		list all jobs
-GET   /jobs/id	show individual job (detail)
-POST  /jobs/id/shards
-DELETE /jobs/id	cleanup job
-*/

@@ -8,15 +8,15 @@ import (
 //	"google.golang.org/cloud/datastore"
 )
 
+/*
 type (
 	apiShards struct{}
 )
 
 func init() {
-	server.AddResource(new(apiShards), "/shards/")
+	server.addResource("/shards/", new(apiShards))
 }
 
-/*
 func (a apiShards) Get(w http.ResponseWriter, r *http.Request, id string) (int, interface{}, error) {
 	c := appengine.NewContext(r)
 	data, _ := listJobs(c)

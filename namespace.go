@@ -215,8 +215,8 @@ func (n *namespace) completed(c context.Context, config Config, key *datastore.K
 
 // rollup shards into single namespace file
 func (n *namespace) rollup(c context.Context) error {
-	// nothing to do if no output writing
-	if n.job.Bucket == "" {
+	// nothing to do if no output writing or no output writtern
+	if n.job.Bucket == "" || n.Count == 0 {
 		return nil
 	}
 

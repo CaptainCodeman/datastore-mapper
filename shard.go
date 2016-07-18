@@ -104,7 +104,7 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
 
 	jobOutput, useJobOutput := s.jobSpec.(JobOutput)
-	if useJobOutput && s.job.Bucket == "" {
+	if useJobOutput && s.job.Bucket != "" {
 		w, err := s.createOutputFile(c)
 		if err != nil {
 			return false, err
@@ -165,9 +165,15 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 			if err == datastore.Done {
 				break
 			}
+
 			if err != nil {
-				log.Errorf(c, "error %s", err.Error())
-				return false, err
+				if appengine.IsTimeoutError(err) {
+					log.Errorf(c, "timeout error")
+					break
+				} else {
+					log.Errorf(c, "error %s", err.Error())
+					return false, err
+				}
 			}
 
 			s.jobSpec.Next(c, s.Counters, key)
@@ -176,7 +182,8 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 			count++
 		}
 
-		if count < size {
+		// no results = done
+		if count == 0 {
 			return true, nil
 		}
 
@@ -264,7 +271,6 @@ func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
 			return nil, err
 		}
 	}
-	defer client.Close()
 
 	o := client.Bucket(s.job.Bucket).Object(s.sliceFilename(s.Sequence)).NewWriter(c)
 
@@ -274,8 +280,8 @@ func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
 
 // rollup shard slices into single file
 func (s *shard) rollup(c context.Context) error {
-	// nothing to do if no output writing
-	if s.job.Bucket == "" {
+	// nothing to do if no output writing or no output written
+	if s.job.Bucket == "" || s.Count == 0 {
 		return nil
 	}
 

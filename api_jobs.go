@@ -1,32 +1,21 @@
 package mapper
 
-import ()
+import (
+	"net/http"
+)
 
 type (
 	apiJobs struct{}
 )
 
 func init() {
-	server.AddResource(new(apiJobs), "/jobs/")
+	server.addResource("/jobs/", new(apiJobs))
 }
 
-/*
 func (a apiJobs) Get(w http.ResponseWriter, r *http.Request, id string) (int, interface{}, error) {
-	c := appengine.NewContext(r)
-	data, _ := listJobs(c)
+	data := jobRegistry
 	return http.StatusOK, data, nil
 }
-
-func (a apiJobs) Post(w http.ResponseWriter, r *http.Request, id string) (int, interface{}, error) {
-	if err := StartJob(r); err != nil {
-		return http.StatusBadRequest, nil, err
-	}
-	data := map[string]interface{}{
-		"started": true,
-	}
-	return http.StatusOK, data, nil
-}
-*/
 
 // Get - list job states
 // Post - start job execution - type, shards, queue

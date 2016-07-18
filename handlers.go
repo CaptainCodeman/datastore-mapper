@@ -145,6 +145,10 @@ func (m *mapper) namespaceCompleteHandler(c context.Context, config Config, key 
 		return fmt.Errorf("expected namespace")
 	}
 
+	if err := ns.rollup(c); err != nil {
+		return err
+	}
+
 	if err := ns.completed(c, *m.config, key); err != nil {
 		return err
 	}

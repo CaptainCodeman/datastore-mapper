@@ -251,6 +251,15 @@ func (q *Query) getScatterSplitPoints(c context.Context, shards, oversampling in
 	}
 
 	log.Debugf(c, "minEntitiesPerShard %d minEntitiesEstimate %d shards %d", minEntitiesPerShard, minEntitiesEstimate, shards)
+	if shards == 1 {
+		// we're going to process the entire range
+		pr, err := newPropertyRange(nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, pr)
+		return results, nil
+	}
 
 	if len(randomKeys) > shards {
 		randomKeys = q.chooseSplitPoints(randomKeys, shards)
