@@ -117,6 +117,10 @@ times it's necessary to iterate over all the data in your system when you need t
 the schema or perform some other operational processing and the mapper provides a great
 approach for doing that by enabling easy splitting and distribution of the workload.
 
+But using the datastore backup isn't always idea - sometimes you want more control over 
+the range and the format of the data being exported. For instance, you may not want or
+need the full content of each entity to be exported to BigQuery.
+
 ## Why a Go version?
 So why not just continue to use the existing Python or Java implementations?
 
@@ -247,3 +251,14 @@ the limits on how many files can be combined).
 Another option is to stream inserts directly into BigQuery which saves the intermediate
 output writing and subsequent import from cloud storage (once streamed inserting into
 partitioned tables is an option, this will make this a better option).
+
+### Example
+Here's an example of a mapper job writing to cloud storage. The files written by each
+slice are rolled up into a single shard file and are fairly evenly distributed (there
+are around 55-60,000 JSON entries in each file):
+
+![Shard Files Example](https://cloud.githubusercontent.com/assets/304910/16933919/1185e24c-4d0f-11e6-84dc-c6e10e07be46.png)
+
+The shard files are then rolled up into a single file for the namespace:
+
+![Namespace File Example](https://cloud.githubusercontent.com/assets/304910/16934010/b3658efa-4d0f-11e6-88bf-5f9463ad7f81.png)

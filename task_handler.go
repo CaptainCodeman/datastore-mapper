@@ -80,7 +80,7 @@ func (m *mapper) handleTask(path, kind string, handler taskHandler) {
 		if err := GetLock(c, key, entity, seq); err != nil {
 			log.Errorf(c, "get lock failed %s", err.Error())
 			// for locking errors, the error gives us the response to use
-			if serr, ok := err.(*LockError); ok {
+			if serr, ok := err.(LockError); ok {
 				w.WriteHeader(serr.Response)
 			} else {
 				w.WriteHeader(http.StatusInternalServerError)
