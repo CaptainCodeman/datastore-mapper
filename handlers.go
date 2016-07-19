@@ -41,7 +41,7 @@ func (m *mapper) jobHandler(c context.Context, config Config, key *datastore.Key
 
 	jobLifecycle, useJobLifecycle := j.jobSpec.(JobLifecycle)
 	if useJobLifecycle && j.Sequence == 1 {
-		jobLifecycle.JobStarted(c, "id")
+		jobLifecycle.JobStarted(c, j.id)
 	}
 
 	if err := j.start(c, *m.config); err != nil {
@@ -66,7 +66,7 @@ func (m *mapper) jobCompleteHandler(c context.Context, config Config, key *datas
 
 	jobLifecycle, useJobLifecycle := j.jobSpec.(JobLifecycle)
 	if useJobLifecycle {
-		jobLifecycle.JobCompleted(c, "id")
+		jobLifecycle.JobCompleted(c, j.id)
 	}
 
 	return nil
@@ -120,7 +120,7 @@ func (m *mapper) namespaceHandler(c context.Context, config Config, key *datasto
 
 	namespaceLifecycle, useNamespaceLifecycle := ns.jobSpec.(NamespaceLifecycle)
 	if useNamespaceLifecycle && ns.Sequence == 1 {
-		namespaceLifecycle.NamespaceStarted(c, "id", "namespace")
+		namespaceLifecycle.NamespaceStarted(c, ns.jobID(), ns.Namespace)
 	}
 
 	err := ns.split(c, *m.config)
@@ -155,7 +155,7 @@ func (m *mapper) namespaceCompleteHandler(c context.Context, config Config, key 
 
 	namespaceLifecycle, useNamespaceLifecycle := ns.jobSpec.(NamespaceLifecycle)
 	if useNamespaceLifecycle {
-		namespaceLifecycle.NamespaceCompleted(c, "id", "namespace")
+		namespaceLifecycle.NamespaceCompleted(c, ns.jobID(), ns.Namespace)
 	}
 
 	return nil
@@ -172,12 +172,12 @@ func (m *mapper) shardHandler(c context.Context, config Config, key *datastore.K
 
 	shardLifecycle, useShardLifecycle := s.jobSpec.(ShardLifecycle)
 	if useShardLifecycle && s.Sequence == 1 {
-		shardLifecycle.ShardStarted(c, "id", "namespace", s.Shard)
+		shardLifecycle.ShardStarted(c, s.jobID(), s.Namespace, s.Shard)
 	}
 
 	sliceLifecycle, useSliceLifecycle := s.jobSpec.(SliceLifecycle)
 	if useSliceLifecycle {
-		sliceLifecycle.SliceStarted(c, "id", "namespace", s.Shard, s.Sequence)
+		sliceLifecycle.SliceStarted(c, s.jobID(), s.Namespace, s.Shard, s.Sequence)
 	}
 
 	completed, err := s.iterate(c)
@@ -186,7 +186,7 @@ func (m *mapper) shardHandler(c context.Context, config Config, key *datastore.K
 	}
 
 	if useSliceLifecycle {
-		sliceLifecycle.SliceCompleted(c, "id", "namespace", s.Shard, s.Sequence)
+		sliceLifecycle.SliceCompleted(c, s.jobID(), s.Namespace, s.Shard, s.Sequence)
 	}
 
 	// schedule continuation or completion
@@ -219,7 +219,7 @@ func (m *mapper) shardCompleteHandler(c context.Context, config Config, key *dat
 
 	shardLifecycle, useShardLifecycle := s.jobSpec.(ShardLifecycle)
 	if useShardLifecycle {
-		shardLifecycle.ShardCompleted(c, "id", "namespace", s.Shard)
+		shardLifecycle.ShardCompleted(c, s.jobID(), s.Namespace, s.Shard)
 	}
 
 	return nil
