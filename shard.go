@@ -100,9 +100,6 @@ func (s *shard) iterate(c context.Context, config Config) (bool, error) {
 	// switch namespace
 	c, _ = appengine.Namespace(c, s.Namespace)
 
-	// datastore cursor context needs to run for the max allowed
-	cc, _ := context.WithTimeout(c, time.Duration(60)*time.Second)
-
 	taskTimeout := time.After(config.TaskTimeout)
 	taskRunning := true
 
@@ -152,6 +149,8 @@ func (s *shard) iterate(c context.Context, config Config) (bool, error) {
 
 		// limit how long the cursor can run before we requery
 		cursorTimeout := time.After(config.CursorTimeout)
+		// datastore cursor context needs to run for the max allowed
+		cc, _ := context.WithTimeout(c, time.Duration(60)*time.Second)
 		it := q.Run(cc)
 
 		// item loop to iterate cursor
