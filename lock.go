@@ -74,8 +74,13 @@ var (
 	ErrLockFailed = LockError{http.StatusServiceUnavailable, "lock failed (retry)"}
 
 	// ErrAlreadyLocked signals that another task has already aquired the lock
-	// so the task should be aborted
-	ErrAlreadyLocked = LockError{http.StatusOK, "already locked (abandon)"}
+	// so the task should be retried
+	ErrAlreadyLocked = LockError{http.StatusServiceUnavailable, "already locked (abandon)"}
+
+	// ErrOldTask signals that the next expected sequence is further ahead than
+	// this task which should be dropped. This is likely caused by a spurious
+	// task re-execution
+	ErrOldTask = LockError{http.StatusOK, "task superseded"}
 )
 
 const (
@@ -219,11 +224,11 @@ func GetLock(c context.Context, key *datastore.Key, entity lockable, sequence in
 	// if the lock sequence is already past this task so it should be dropped
 	if lock.Sequence > sequence {
 		log.Errorf(c, "lock superseded")
-		return ErrAlreadyLocked
+		return ErrOldTask
 	}
 
 	// if the lock is within the lease duration we return that it's locked so
-	// that it will be retried
+	// that this task will be retried
 	if lock.Timestamp.Add(leaseDuration).After(getTime()) {
 		log.Errorf(c, "lock leased")
 		return ErrAlreadyLocked

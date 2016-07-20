@@ -96,12 +96,15 @@ func (s *shard) sliceFilename(slice int) string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + "/" + strconv.Itoa(slice) + ".json"
 }
 
-func (s *shard) iterate(c context.Context) (bool, error) {
+func (s *shard) iterate(c context.Context, config Config) (bool, error) {
 	// switch namespace
 	c, _ = appengine.Namespace(c, s.Namespace)
 
-	// use the full 10 minutes allowed (assuming front-end instance type)
-	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
+	// datastore cursor context needs to run for the max allowed
+	cc, _ := context.WithTimeout(c, time.Duration(60)*time.Second)
+
+	taskTimeout := time.After(config.TaskTimeout)
+	taskRunning := true
 
 	jobOutput, useJobOutput := s.jobSpec.(JobOutput)
 	if useJobOutput && s.job.Bucket != "" {
@@ -128,15 +131,6 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 		cursor = &newCursor
 	}
 
-	// we query and proecess in batches of 'size' and also create a
-	// timeout signal that is checked after each batch. So, a batch has
-	// to take less than 5 minutes to execute
-	timeout := make(chan bool, 1)
-	timer := time.AfterFunc(time.Duration(5)*time.Minute, func() {
-		timeout <- true
-	})
-	defer timer.Stop()
-
 	// what we'll load into if doing full entity loads (i.e. not doing KeysOnly)
 	var entity interface{}
 
@@ -148,45 +142,56 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 		q = q.KeysOnly()
 	}
 
-	// chunk size (make a parameter?)
-	size := 1000
-	q = q.Limit(size)
+	// main task loop to repeat datastore query with cursor
+	for taskRunning {
 
-	for {
-		count := 0
-
+		// if cursor is set, start the query at that point
 		if cursor != nil {
 			q = q.Start(*cursor)
 		}
 
-		it := q.Run(c)
+		// limit how long the cursor can run before we requery
+		cursorTimeout := time.After(config.CursorTimeout)
+		it := q.Run(cc)
+
+		// item loop to iterate cursor
+	cursorLoop:
 		for {
 			key, err := it.Next(entity)
 			if err == datastore.Done {
-				break
+				// we reached the end
+				return true, nil
 			}
 
 			if err != nil {
-				if appengine.IsTimeoutError(err) {
-					log.Errorf(c, "timeout error")
-					break
-				} else {
-					log.Errorf(c, "error %s", err.Error())
-					return false, err
-				}
+				log.Errorf(c, "error %s", err.Error())
+				return false, err
 			}
 
+			// TODO: handle task errors (fail slice?)
 			s.jobSpec.Next(c, s.Counters, key)
 			s.Count++
 
-			count++
+			select {
+			case <-taskTimeout:
+				// clearing the flag breaks us out of the task loop but also lets us update the
+				// cursor first when we break from the inner cursorLoop
+				taskRunning = false
+				break cursorLoop
+			default:
+				select {
+				case <-cursorTimeout:
+					// this forces a new cursor and query so we don't suffer from datastore timeouts
+					break cursorLoop
+				default:
+					// no timeout so carry on with the current cursor
+					continue cursorLoop
+				}
+			}
 		}
 
-		// no results = done
-		if count == 0 {
-			return true, nil
-		}
-
+		// we need to get the cursor for where we are upto whether we are requerying
+		// within this task or scheduling a new continuation slice
 		newCursor, err := it.Cursor()
 		if err != nil {
 			log.Errorf(c, "get next cursor error %s", err.Error())
@@ -194,16 +199,9 @@ func (s *shard) iterate(c context.Context) (bool, error) {
 		}
 		cursor = &newCursor
 		s.Cursor = cursor.String()
-
-		// check if we've timed out
-		select {
-		case <-timeout:
-			// timeout without completing
-			return false, nil
-		default:
-			// continue processing in thsi request
-		}
 	}
+
+	return false, nil
 }
 
 func (s *shard) completed(c context.Context, config Config, key *datastore.Key) error {

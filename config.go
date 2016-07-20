@@ -30,6 +30,14 @@ type (
 		// LeaseTimeout is the time considered to be a timeout
 		LeaseTimeout time.Duration
 
+		// TaskTimeout is the time to execute a task for.
+		// For frontend instances the limit is 10 minutes
+		TaskTimeout time.Duration
+
+		// CursorTimeout is the time to use a cursor for before requerying
+		// The default limit is 60 seconds
+		CursorTimeout time.Duration
+
 		// Retries is the maximum number of times to retry a failing task
 		Retries int
 
@@ -50,6 +58,8 @@ func newConfig() *Config {
 		Oversampling:    32,
 		LeaseDuration:   time.Duration(30) * time.Second,
 		LeaseTimeout:    time.Duration(10)*time.Minute + time.Duration(30)*time.Second,
+		TaskTimeout:     time.Duration(10)*time.Minute - time.Duration(30)*time.Second,
+		CursorTimeout:   time.Duration(50) * time.Second,
 		Retries:         31,
 		LogVerbose:      false,
 	}
@@ -99,6 +109,22 @@ func LeaseDuration(duration time.Duration) func(*Config) error {
 func LeaseTimeout(duration time.Duration) func(*Config) error {
 	return func(c *Config) error {
 		c.LeaseTimeout = duration
+		return nil
+	}
+}
+
+// TaskTimeout sets how long a task is allowed to execute
+func TaskTimeout(duration time.Duration) func(*Config) error {
+	return func(c *Config) error {
+		c.TaskTimeout = duration
+		return nil
+	}
+}
+
+// CursorTimeout sets how long a datastore cursor is allowed to run
+func CursorTimeout(duration time.Duration) func(*Config) error {
+	return func(c *Config) error {
+		c.CursorTimeout = duration
 		return nil
 	}
 }

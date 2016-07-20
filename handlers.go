@@ -180,7 +180,7 @@ func (m *mapper) shardHandler(c context.Context, config Config, key *datastore.K
 		sliceLifecycle.SliceStarted(c, s.jobID(), s.Namespace, s.Shard, s.Sequence)
 	}
 
-	completed, err := s.iterate(c)
+	completed, err := s.iterate(c, *m.config)
 	if err != nil {
 		return err
 	}
