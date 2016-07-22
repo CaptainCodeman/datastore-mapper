@@ -13,8 +13,8 @@ type (
 		// DatastorePrefix is added to the beginning of every mapreduce collection name
 		DatastorePrefix string
 
-		// Queue is the default queue to use for mapreduce tasks if not
-		Queue string
+		// DefaultQueue is the default queue to use for mapreduce tasks if not
+		DefaultQueue string
 
 		// Shards is the default number of shards to use
 		Shards int
@@ -53,7 +53,7 @@ func newConfig() *Config {
 	return &Config{
 		Path:            DefaultPath,
 		DatastorePrefix: "MP_",
-		Queue:           "",
+		DefaultQueue:    "",
 		Shards:          8,
 		Oversampling:    32,
 		LeaseDuration:   time.Duration(30) * time.Second,
@@ -73,10 +73,10 @@ func DatastorePrefix(prefix string) func(*Config) error {
 	}
 }
 
-// Queue sets the default taskqueue to use when scheduling mapper tasks
-func Queue(queue string) func(*Config) error {
+// DefaultQueue sets the default taskqueue to use when scheduling mapper tasks
+func DefaultQueue(queue string) func(*Config) error {
 	return func(c *Config) error {
-		c.Queue = queue
+		c.DefaultQueue = queue
 		return nil
 	}
 }

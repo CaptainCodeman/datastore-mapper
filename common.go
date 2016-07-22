@@ -8,14 +8,6 @@ import (
 )
 
 type (
-	// taskable (urgh, horrible name) is anything that can
-	// be run as a task. It's basically all our datastore models
-	// and used to set the private common values (context?)
-	taskable interface {
-		getCommon() *common
-		setCommon(id string, jobSpec JobSpec, queue string)
-	}
-
 	// common contains properties that are common across all
 	// mapper entities (job, iterator, namespace and shard)
 	common struct {
@@ -45,7 +37,7 @@ type (
 
 		// private fields used by local instance
 		id        string
-		queue     string
+		job       *job
 		jobSpec   JobSpec
 		startTime time.Time
 	}
@@ -53,12 +45,6 @@ type (
 
 func (c *common) getCommon() *common {
 	return c
-}
-
-func (c *common) setCommon(id string, jobSpec JobSpec, queue string) {
-	c.id = id
-	c.jobSpec = jobSpec
-	c.queue = queue
 }
 
 func (c *common) start(query *Query) {

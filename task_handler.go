@@ -1,24 +1,23 @@
 package mapper
 
 import (
-	"fmt"
-
 	"net/http"
 
+	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
-	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 )
 
 type (
+	// interface that all our entities implement
 	taskEntity interface {
-		taskable
-		lockable
+		locker.Lockable
+		getCommon() *common
 	}
 
-	// subTask is any non-job task that needs to check if job is still active
-	subTask interface {
+	// childTask is any non-job task that needs to check if job is still active
+	childTask interface {
 		jobID() string
 		setJob(job *job)
 	}
@@ -27,140 +26,72 @@ type (
 	taskHandler func(c context.Context, config Config, key *datastore.Key, entity taskEntity) error
 )
 
-func factory(c context.Context, prefix, kind, id string) (*datastore.Key, taskEntity) {
-	key := datastore.NewKey(c, prefix+kind, id, 0, nil)
-	var entity taskEntity
-
-	switch kind {
-	case jobKind:
-		entity = new(job)
-	case iteratorKind:
-		entity = new(iterator)
-	case namespaceKind:
-		entity = new(namespace)
-	case shardKind:
-		entity = new(shard)
-	}
-
-	return key, entity
+func jobFactory() locker.Lockable {
+	return new(job)
 }
 
-func (m *mapper) handleTask(path, kind string, handler taskHandler) {
-	fn := func(w http.ResponseWriter, r *http.Request) {
-		c := appengine.NewContext(r)
+func iteratorFactory() locker.Lockable {
+	return new(iterator)
+}
 
-		// ensure request is a task request
-		if r.Method != "POST" {
-			log.Warningf(c, "expected POST, got %s", r.Method)
-			return
-		}
+func namespaceFactory() locker.Lockable {
+	return new(namespace)
+}
 
-		// X-AppEngine-QueueName
-		// X-AppEngine-TaskName
-		// X-AppEngine-TaskRetryCount
-		// X-AppEngine-TaskExecutionCount
-		// X-AppEngine-TaskETA
+func shardFactory() locker.Lockable {
+	return new(shard)
+}
 
-		if r.Header.Get("X-Appengine-TaskName") == "" {
-			log.Warningf(c, "non task request")
-			return
-		}
-
-		// get the lock details for this task
-		id, seq, queue, _ := ParseLock(r)
-
-		if m.config.LogVerbose {
-			log.Infof(c, "path %s kind %s id %s seq %d", r.URL.Path, kind, id, seq)
-		}
-
-		// create the key and entity for the lock
-		key, entity := factory(c, m.config.DatastorePrefix, kind, id)
-
-		// try to obtain the lock
-		if err := GetLock(c, key, entity, seq); err != nil {
-			log.Errorf(c, "get lock failed %s", err.Error())
-			// for locking errors, the error gives us the response to use
-			if serr, ok := err.(LockError); ok {
-				w.WriteHeader(serr.Response)
-			} else {
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-			fmt.Fprintf(w, err.Error())
-			return
-		}
-
-		entity.setCommon(id, nil, queue)
+// convert the locker.TaskHandler
+func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactory) http.Handler {
+	fn := func(c context.Context, r *http.Request, key *datastore.Key, entity locker.Lockable) error {
+		tentity := entity.(taskEntity)
+		common := tentity.getCommon()
+		common.id = key.StringID()
 
 		// determine if we're a job task (so have already loaded the job)
 		// or a sub task (in which case we need to load it) so that we can
 		// abort if the flag has been set or set the job so that the handler
 		// can access the jobSpec and Query (should we pass though through?)
 		var j *job
-		sub, isSub := entity.(subTask)
-		if isSub {
-			jobID := sub.jobID()
+		child, isChild := entity.(childTask)
+		if isChild {
+			jobID := child.jobID()
 			if m.config.LogVerbose {
 				log.Infof(c, "owning job %s", jobID)
 			}
-			// job, err := m.getJob(c, jobID)
 			key := datastore.NewKey(c, m.config.DatastorePrefix+jobKind, jobID, 0, nil)
 			j = new(job)
-			err := storage.Get(c, key, j)
-			if err != nil {
+			if err := storage.Get(c, key, j); err != nil {
 				// we need the job so error if we couldn't load it
-				log.Errorf(c, "error loading job %s", err.Error)
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, err.Error())
-				ClearLock(c, key, false)
-				return
+				return err
 			}
-			sub.setJob(j)
+			common.job = j
 		} else {
 			j = entity.(*job)
 		}
 
 		if j.Abort {
-			// abort means we don't do anything but return OK so the
-			// task is marked complete and drains
-			log.Warningf(c, "job aborted")
-			w.WriteHeader(http.StatusOK)
-			ClearLock(c, key, false)
-			return
+			// abort means we don't process anything
+			// the task is marked complete and drains
+			return nil
 		}
 
 		jobSpec, err := CreateJobInstance(j.JobName)
 		if err != nil {
-			log.Errorf(c, "error creating job instance %s", err.Error)
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, err.Error())
-			ClearLock(c, key, false)
-			return
+			log.Errorf(c, "error creating job instance %v", err)
+			return err
 		}
 
-		entity.setCommon(id, jobSpec, queue)
-
-		common := entity.getCommon()
-		log.Infof(c, "query: %s", common.Query)
+		common.jobSpec = jobSpec
 
 		// call the actual handler
 		if m.config.LogVerbose {
 			log.Infof(c, "calling handler")
 		}
-		if err := handler(c, *m.config, key, entity); err != nil {
-			log.Errorf(c, "task error %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprintf(w, err.Error())
-			ClearLock(c, key, false)
-			return
-		}
 
-		if m.config.LogVerbose {
-			log.Infof(c, "task successful")
-		}
-
-		w.WriteHeader(http.StatusOK)
+		return handler(c, *m.config, key, tentity)
 	}
 
-	// register handler with mux
-	m.HandleFunc(path, fn)
+	return m.locker.Handle(fn, factory)
 }

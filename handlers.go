@@ -20,14 +20,14 @@ const (
 )
 
 func init() {
-	server.handleTask(jobURL, jobKind, server.jobHandler)
-	server.handleTask(jobCompleteURL, jobKind, server.jobCompleteHandler)
-	server.handleTask(iteratorURL, iteratorKind, server.iteratorHandler)
-	server.handleTask(iteratorCompleteURL, iteratorKind, server.iteratorCompleteHandler)
-	server.handleTask(namespaceURL, namespaceKind, server.namespaceHandler)
-	server.handleTask(namespaceCompleteURL, namespaceKind, server.namespaceCompleteHandler)
-	server.handleTask(shardURL, shardKind, server.shardHandler)
-	server.handleTask(shardCompleteURL, shardKind, server.shardCompleteHandler)
+	server.Handle(jobURL, server.handlerAdapter(server.jobHandler, jobFactory))
+	server.Handle(jobCompleteURL, server.handlerAdapter(server.jobCompleteHandler, jobFactory))
+	server.Handle(iteratorURL, server.handlerAdapter(server.iteratorHandler, iteratorFactory))
+	server.Handle(iteratorCompleteURL, server.handlerAdapter(server.iteratorCompleteHandler, iteratorFactory))
+	server.Handle(namespaceURL, server.handlerAdapter(server.namespaceHandler, namespaceFactory))
+	server.Handle(namespaceCompleteURL, server.handlerAdapter(server.namespaceCompleteHandler, namespaceFactory))
+	server.Handle(shardURL, server.handlerAdapter(server.shardHandler, shardFactory))
+	server.Handle(shardCompleteURL, server.handlerAdapter(server.shardCompleteHandler, shardFactory))
 }
 
 func (m *mapper) jobHandler(c context.Context, config Config, key *datastore.Key, entity taskEntity) error {
@@ -44,7 +44,7 @@ func (m *mapper) jobHandler(c context.Context, config Config, key *datastore.Key
 		jobLifecycle.JobStarted(c, j.id)
 	}
 
-	if err := j.start(c, *m.config); err != nil {
+	if err := j.start(c, m); err != nil {
 		return err
 	}
 
@@ -60,7 +60,7 @@ func (m *mapper) jobCompleteHandler(c context.Context, config Config, key *datas
 		return fmt.Errorf("expected job")
 	}
 
-	if err := j.completed(c, *m.config, key); err != nil {
+	if err := j.completed(c, m, key); err != nil {
 		return err
 	}
 
@@ -81,7 +81,7 @@ func (m *mapper) iteratorHandler(c context.Context, config Config, key *datastor
 		return fmt.Errorf("expected iterator")
 	}
 
-	completed, err := it.iterate(c, *m.config)
+	completed, err := it.iterate(c, m)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (m *mapper) iteratorHandler(c context.Context, config Config, key *datastor
 		url = m.config.Path + iteratorURL
 	}
 
-	return ScheduleLock(c, key, it, url, nil, it.queue)
+	return m.locker.Schedule(c, key, it, url, nil)
 }
 
 func (m *mapper) iteratorCompleteHandler(c context.Context, config Config, key *datastore.Key, entity taskEntity) error {
@@ -106,7 +106,7 @@ func (m *mapper) iteratorCompleteHandler(c context.Context, config Config, key *
 		return fmt.Errorf("expected iterator")
 	}
 
-	return it.completed(c, *m.config, key)
+	return it.completed(c, m, key)
 }
 
 func (m *mapper) namespaceHandler(c context.Context, config Config, key *datastore.Key, entity taskEntity) error {
@@ -123,16 +123,16 @@ func (m *mapper) namespaceHandler(c context.Context, config Config, key *datasto
 		namespaceLifecycle.NamespaceStarted(c, ns.jobID(), ns.Namespace)
 	}
 
-	err := ns.split(c, *m.config)
+	err := ns.split(c, m)
 	if err != nil {
 		return err
 	}
 
 	// if there are no shards for this namespace, short-circuit 'complete'
 	if ns.ShardsTotal == 0 {
-		return ns.completed(c, *m.config, key)
+		return ns.completed(c, m, key)
 	} else {
-		return ns.update(c, *m.config, key)
+		return ns.update(c, m, key)
 	}
 }
 
@@ -149,7 +149,7 @@ func (m *mapper) namespaceCompleteHandler(c context.Context, config Config, key 
 		return err
 	}
 
-	if err := ns.completed(c, *m.config, key); err != nil {
+	if err := ns.completed(c, m, key); err != nil {
 		return err
 	}
 
@@ -180,7 +180,7 @@ func (m *mapper) shardHandler(c context.Context, config Config, key *datastore.K
 		sliceLifecycle.SliceStarted(c, s.jobID(), s.Namespace, s.Shard, s.Sequence)
 	}
 
-	completed, err := s.iterate(c, *m.config)
+	completed, err := s.iterate(c, m)
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func (m *mapper) shardHandler(c context.Context, config Config, key *datastore.K
 	} else {
 		url = m.config.Path + shardURL
 	}
-	return ScheduleLock(c, key, s, url, nil, s.queue)
+	return m.locker.Schedule(c, key, s, url, nil)
 }
 
 func (m *mapper) shardCompleteHandler(c context.Context, config Config, key *datastore.Key, entity taskEntity) error {
@@ -213,7 +213,7 @@ func (m *mapper) shardCompleteHandler(c context.Context, config Config, key *dat
 		return err
 	}
 
-	if err := s.completed(c, *m.config, key); err != nil {
+	if err := s.completed(c, m, key); err != nil {
 		return err
 	}
 

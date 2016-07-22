@@ -8,6 +8,7 @@ import (
 
 	"io/ioutil"
 
+	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -23,22 +24,20 @@ import (
 type (
 	// shard processes shards for a job (slices of a namespace)
 	shard struct {
+		locker.Lock
 		common
-		lock
-
-		// Shard is the shard number within this namespace
-		Shard int `datastore:"shard,noindex"`
 
 		// Namespace is the namespace for this shard
 		Namespace string `datastore:"namespace,noindex"`
+
+		// Shard is the shard number within this namespace
+		Shard int `datastore:"shard,noindex"`
 
 		// Description is the description for this shard
 		Description string `datastore:"description,noindex"`
 
 		// Cursor is the datastore cursor to start from
 		Cursor string `datastore:"cursor,noindex"`
-
-		job *job
 	}
 )
 
@@ -51,12 +50,11 @@ func (s *shard) setJob(job *job) {
 }
 
 func (s *shard) copyFrom(x shard) {
+	s.Lock = x.Lock
 	s.common = x.common
-	s.lock = x.lock
 	s.Shard = x.Shard
 	s.Namespace = x.Namespace
 	s.Description = x.Description
-	s.Query = x.Query
 	s.Cursor = x.Cursor
 }
 
@@ -96,11 +94,11 @@ func (s *shard) sliceFilename(slice int) string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + "/" + strconv.Itoa(slice) + ".json"
 }
 
-func (s *shard) iterate(c context.Context, config Config) (bool, error) {
+func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 	// switch namespace
 	c, _ = appengine.Namespace(c, s.Namespace)
 
-	taskTimeout := time.After(config.TaskTimeout)
+	taskTimeout := time.After(mapper.config.TaskTimeout)
 	taskRunning := true
 
 	jobOutput, useJobOutput := s.jobSpec.(JobOutput)
@@ -148,7 +146,7 @@ func (s *shard) iterate(c context.Context, config Config) (bool, error) {
 		}
 
 		// limit how long the cursor can run before we requery
-		cursorTimeout := time.After(config.CursorTimeout)
+		cursorTimeout := time.After(mapper.config.CursorTimeout)
 		// datastore cursor context needs to run for the max allowed
 		cc, _ := context.WithTimeout(c, time.Duration(60)*time.Second)
 		it := q.Run(cc)
@@ -203,14 +201,17 @@ func (s *shard) iterate(c context.Context, config Config) (bool, error) {
 	return false, nil
 }
 
-func (s *shard) completed(c context.Context, config Config, key *datastore.Key) error {
+func (s *shard) completed(c context.Context, mapper *mapper, key *datastore.Key) error {
 	s.complete()
 	s.Cursor = ""
-	s.RequestID = ""
 
 	// update shard status and owning namespace within a transaction
+	queue, ok := locker.QueueFromContext(c)
+	if !ok {
+		queue = mapper.config.DefaultQueue
+	}
 	fresh := new(shard)
-	nsKey := s.namespaceKey(c, config)
+	nsKey := s.namespaceKey(c, *mapper.config)
 	ns := new(namespace)
 
 	return storage.RunInTransaction(c, func(tc context.Context) error {
@@ -221,13 +222,15 @@ func (s *shard) completed(c context.Context, config Config, key *datastore.Key) 
 		}
 
 		fresh.copyFrom(*s)
+		fresh.Lock.Complete()
+
 		ns.ShardsSuccessful++
 		ns.common.rollup(s.common)
 
 		// if all shards have completed, schedule namespace/completed to update job
 		if ns.ShardsSuccessful == ns.ShardsTotal {
-			t := NewLockTask(nsKey, ns, config.Path+namespaceCompleteURL, nil)
-			if _, err := taskqueue.Add(tc, t, s.queue); err != nil {
+			t := mapper.locker.NewTask(nsKey, ns, mapper.config.Path+namespaceCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, queue); err != nil {
 				return err
 			}
 		}
@@ -237,7 +240,7 @@ func (s *shard) completed(c context.Context, config Config, key *datastore.Key) 
 		}
 
 		return nil
-	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+	}, &datastore.TransactionOptions{XG: true})
 }
 
 func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
@@ -343,7 +346,6 @@ func (s *shard) rollup(c context.Context) error {
 func (s *shard) Load(props []datastore.Property) error {
 	datastore.LoadStruct(s, props)
 	s.common.Load(props)
-	s.lock.Load(props)
 	return nil
 }
 
@@ -351,17 +353,11 @@ func (s *shard) Load(props []datastore.Property) error {
 func (s *shard) Save() ([]datastore.Property, error) {
 	props, err := datastore.SaveStruct(s)
 
-	jprops, err := s.common.Save()
+	cprops, err := s.common.Save()
 	if err != nil {
 		return nil, err
 	}
-	props = append(props, jprops...)
-
-	lprops, err := s.lock.Save()
-	if err != nil {
-		return nil, err
-	}
-	props = append(props, lprops...)
+	props = append(props, cprops...)
 
 	return props, err
 }

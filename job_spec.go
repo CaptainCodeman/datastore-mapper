@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 
 	"hash/adler32"
 	"net/http"
 
+	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
@@ -107,27 +107,30 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	c := appengine.NewContext(r)
+
 	values := r.URL.Query()
 	name := values.Get("name")
 	jobSpec, err := CreateJobInstance(name)
 	if err != nil {
 		return
-		// return err
 	}
 
 	shards, err := strconv.Atoi(values.Get("shards"))
 	if shards == 0 || err != nil {
 		shards = m.config.Shards
 	}
+
 	queue := values.Get("queue")
-	if queue == "" {
-		queue = m.config.Queue
+	if queue != "" {
+		// override the queue for this request
+		// (used by locker.Schedule later)
+		c = locker.WithQueue(c, queue)
 	}
 	bucket := values.Get("bucket")
 
 	query, _ := jobSpec.Query(r)
 
-	c := appengine.NewContext(r)
 	requestHash := r.Header.Get("X-Appengine-Request-Id-Hash")
 	if requestHash == "" {
 		// this should only happen when testing, we just need a short hash
@@ -135,7 +138,7 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 		requestHash = strconv.FormatUint(uint64(adler32.Checksum([]byte(requestID))), 16)
 	}
 
-	id := fmt.Sprintf("%s-%s", strings.Replace(name, ".", "", 1), requestHash)
+	id := fmt.Sprintf("%s-%s", name, requestHash)
 	job := &job{
 		JobName:   name,
 		Bucket:    bucket,
@@ -145,5 +148,5 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 	job.common.start(query)
 
 	key := datastore.NewKey(c, m.config.DatastorePrefix+jobKind, id, 0, nil)
-	ScheduleLock(c, key, job, m.config.Path+jobURL, nil, queue)
+	m.locker.Schedule(c, key, job, m.config.Path+jobURL, nil)
 }

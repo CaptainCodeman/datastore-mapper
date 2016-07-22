@@ -7,22 +7,22 @@ import (
 
 	"io/ioutil"
 
+	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	apistorage "google.golang.org/api/storage/v1"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/taskqueue"
-
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	apistorage "google.golang.org/api/storage/v1"
 )
 
 type (
 	// namespace processes a single namespace for a job
 	namespace struct {
+		locker.Lock
 		common
-		lock
 
 		// Namespace is the namespace to process
 		Namespace string `datastore:"namespace,noindex"`
@@ -35,11 +35,6 @@ type (
 
 		// ShardsFailed is the number of shards failed
 		ShardsFailed int `datastore:"shards_failed,noindex"`
-
-		// Query is the datastore query for this namespace
-		Query *Query `datastore:"-"`
-
-		job *job
 	}
 )
 
@@ -52,21 +47,21 @@ func (n *namespace) setJob(job *job) {
 }
 
 func (n *namespace) copyFrom(x namespace) {
+	n.Lock = x.Lock
 	n.common = x.common
-	n.lock = x.lock
 	n.Namespace = x.Namespace
 	n.ShardsTotal = x.ShardsTotal
 	n.ShardsSuccessful = x.ShardsSuccessful
 	n.ShardsFailed = x.ShardsFailed
 }
 
-func (n *namespace) jobKey(c context.Context, config Config) *datastore.Key {
-	return datastore.NewKey(c, config.DatastorePrefix+jobKind, n.jobID(), 0, nil)
-}
-
 func (n *namespace) jobID() string {
 	parts := strings.Split(n.id, "-")
 	return parts[0] + "-" + parts[1]
+}
+
+func (n *namespace) jobKey(c context.Context, config Config) *datastore.Key {
+	return datastore.NewKey(c, config.DatastorePrefix+jobKind, n.jobID(), 0, nil)
 }
 
 func (n *namespace) namespaceFilename() string {
@@ -91,8 +86,8 @@ func (n *namespace) shardFilename(shard int) string {
 	return parts[0] + "-" + parts[1] + "/" + ns + "/" + strconv.Itoa(shard) + ".json"
 }
 
-func (n *namespace) split(c context.Context, config Config) error {
-	queries, err := n.Query.split(c, n.job.Shards, config.Oversampling)
+func (n *namespace) split(c context.Context, mapper *mapper) error {
+	queries, err := n.Query.split(c, n.job.Shards, mapper.config.Oversampling)
 	if err != nil {
 		return err
 	}
@@ -113,7 +108,7 @@ func (n *namespace) split(c context.Context, config Config) error {
 	keys := make([]*datastore.Key, n.ShardsTotal)
 	for i := 0; i < n.ShardsTotal; i++ {
 		id := fmt.Sprintf("%s-%d", n.id, i)
-		key := datastore.NewKey(c, config.DatastorePrefix+shardKind, id, 0, nil)
+		key := datastore.NewKey(c, mapper.config.DatastorePrefix+shardKind, id, 0, nil)
 		keys[i] = key
 	}
 
@@ -133,7 +128,7 @@ func (n *namespace) split(c context.Context, config Config) error {
 					s.Namespace = n.Namespace
 					s.Description = q.String()
 
-					if err := ScheduleLock(c, k, s, config.Path+shardURL, nil, n.queue); err != nil {
+					if err := mapper.locker.Schedule(c, k, s, mapper.config.Path+shardURL, nil); err != nil {
 						return err
 					}
 				}
@@ -147,7 +142,12 @@ func (n *namespace) split(c context.Context, config Config) error {
 	return nil
 }
 
-func (n *namespace) update(c context.Context, config Config, key *datastore.Key) error {
+func (n *namespace) update(c context.Context, mapper *mapper, key *datastore.Key) error {
+	queue, ok := locker.QueueFromContext(c)
+	if !ok {
+		queue = mapper.config.DefaultQueue
+	}
+
 	// update namespace status within a transaction
 	return storage.RunInTransaction(c, func(tc context.Context) error {
 		fresh := new(namespace)
@@ -157,12 +157,11 @@ func (n *namespace) update(c context.Context, config Config, key *datastore.Key)
 
 		// shards can already be processing ahead of this total being written
 		fresh.ShardsTotal = n.ShardsTotal
-		fresh.RequestID = ""
 
 		// if all shards have completed, schedule namespace/completed to update job
 		if fresh.ShardsSuccessful == fresh.ShardsTotal {
-			t := NewLockTask(key, fresh, config.Path+namespaceCompleteURL, nil)
-			if _, err := taskqueue.Add(tc, t, n.queue); err != nil {
+			t := mapper.locker.NewTask(key, fresh, mapper.config.Path+namespaceCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, queue); err != nil {
 				log.Errorf(c, "add task %s", err.Error())
 				return err
 			}
@@ -173,17 +172,21 @@ func (n *namespace) update(c context.Context, config Config, key *datastore.Key)
 		}
 
 		return nil
-	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+	}, &datastore.TransactionOptions{XG: true})
 }
 
-func (n *namespace) completed(c context.Context, config Config, key *datastore.Key) error {
+func (n *namespace) completed(c context.Context, mapper *mapper, key *datastore.Key) error {
 	n.complete()
-	n.RequestID = ""
 
 	// update namespace status and job within a transaction
+	queue, ok := locker.QueueFromContext(c)
+	if !ok {
+		queue = mapper.config.DefaultQueue
+	}
 	fresh := new(namespace)
-	jobKey := n.jobKey(c, config)
+	jobKey := n.jobKey(c, *mapper.config)
 	job := new(job)
+
 	return storage.RunInTransaction(c, func(tc context.Context) error {
 		keys := []*datastore.Key{key, jobKey}
 		vals := []interface{}{fresh, job}
@@ -196,12 +199,14 @@ func (n *namespace) completed(c context.Context, config Config, key *datastore.K
 		}
 
 		fresh.copyFrom(*n)
+		fresh.Lock.Complete()
+
 		job.NamespacesSuccessful++
 		job.common.rollup(n.common)
 
 		if job.NamespacesSuccessful == job.NamespacesTotal && !job.Iterating {
-			t := NewLockTask(jobKey, job, config.Path+jobCompleteURL, nil)
-			if _, err := taskqueue.Add(tc, t, n.queue); err != nil {
+			t := mapper.locker.NewTask(jobKey, job, mapper.config.Path+jobCompleteURL, nil)
+			if _, err := taskqueue.Add(tc, t, queue); err != nil {
 				return err
 			}
 		}
@@ -210,7 +215,7 @@ func (n *namespace) completed(c context.Context, config Config, key *datastore.K
 			return err
 		}
 		return nil
-	}, &datastore.TransactionOptions{XG: true, Attempts: attempts})
+	}, &datastore.TransactionOptions{XG: true})
 }
 
 // rollup shards into single namespace file
@@ -282,7 +287,6 @@ func (n *namespace) rollup(c context.Context) error {
 func (n *namespace) Load(props []datastore.Property) error {
 	datastore.LoadStruct(n, props)
 	n.common.Load(props)
-	n.lock.Load(props)
 
 	for _, prop := range props {
 		switch prop.Name {
@@ -304,17 +308,11 @@ func (n *namespace) Save() ([]datastore.Property, error) {
 		return nil, err
 	}
 
-	jprops, err := n.common.Save()
+	cprops, err := n.common.Save()
 	if err != nil {
 		return nil, err
 	}
-	props = append(props, jprops...)
-
-	lprops, err := n.lock.Save()
-	if err != nil {
-		return nil, err
-	}
-	props = append(props, lprops...)
+	props = append(props, cprops...)
 
 	return props, nil
 }

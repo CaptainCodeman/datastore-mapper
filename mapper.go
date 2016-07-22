@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"net/http"
+
+	"github.com/captaincodeman/datastore-locker"
 )
 
 const (
@@ -16,6 +18,7 @@ type (
 	// the path it is mounted at so we can generate tasks to address it
 	mapper struct {
 		*http.ServeMux
+		locker *locker.Locker
 		config *Config
 	}
 )
@@ -38,6 +41,19 @@ func NewServer(path string, options ...func(*Config) error) (http.Handler, error
 		}
 	}
 	handler := http.StripPrefix(server.config.Path, server)
+
+	// pass on locker options
+	var err error
+	server.locker, err = locker.NewLocker(
+		locker.LeaseDuration(server.config.LeaseDuration),
+		locker.LeaseTimeout(server.config.LeaseTimeout),
+		locker.DefaultQueue(server.config.DefaultQueue),
+		locker.MaxRetries(server.config.Retries),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return handler, nil
 }
 

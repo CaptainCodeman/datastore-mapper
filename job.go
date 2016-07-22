@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
@@ -9,8 +10,10 @@ import (
 type (
 	// job is the datastore struct to control execution of a job instance
 	job struct {
+		locker.Lock
 		common
-		lock
+
+		// TODO: store serialized job spec so it can be used for parameters
 
 		// Job is the job processor name
 		JobName string `datastore:"job_name"`
@@ -43,21 +46,21 @@ const (
 	jobKind = "job"
 )
 
-func (j *job) start(c context.Context, config Config) error {
-	if config.LogVerbose {
+func (j *job) start(c context.Context, mapper *mapper) error {
+	if mapper.config.LogVerbose {
 		log.Debugf(c, "creating iterator for job %s", j.id)
 	}
 
 	iterator := new(iterator)
 	iterator.start(j.Query)
 
-	key := datastore.NewKey(c, config.DatastorePrefix+iteratorKind, j.id, 0, nil)
-	return ScheduleLock(c, key, iterator, config.Path+iteratorURL, nil, j.queue)
+	key := datastore.NewKey(c, mapper.config.DatastorePrefix+iteratorKind, j.id, 0, nil)
+	return mapper.locker.Schedule(c, key, iterator, mapper.config.Path+iteratorURL, nil)
 }
 
-func (j *job) completed(c context.Context, config Config, key *datastore.Key) error {
+func (j *job) completed(c context.Context, mapper *mapper, key *datastore.Key) error {
 	j.complete()
-	j.RequestID = ""
+	j.Lock.Complete()
 
 	// everything is complete when this runs, so no need for a transaction
 	if _, err := storage.Put(c, key, j); err != nil {
@@ -71,7 +74,6 @@ func (j *job) completed(c context.Context, config Config, key *datastore.Key) er
 func (j *job) Load(props []datastore.Property) error {
 	datastore.LoadStruct(j, props)
 	j.common.Load(props)
-	j.lock.Load(props)
 
 	return nil
 }
@@ -88,12 +90,6 @@ func (j *job) Save() ([]datastore.Property, error) {
 		return nil, err
 	}
 	props = append(props, jprops...)
-
-	lprops, err := j.lock.Save()
-	if err != nil {
-		return nil, err
-	}
-	props = append(props, lprops...)
 
 	return props, nil
 }
