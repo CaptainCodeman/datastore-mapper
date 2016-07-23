@@ -93,5 +93,5 @@ func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactor
 		return handler(c, *m.config, key, tentity)
 	}
 
-	return m.locker.Handle(fn, factory)
+	return http.Handler(m.locker.Handle(fn, factory))
 }
