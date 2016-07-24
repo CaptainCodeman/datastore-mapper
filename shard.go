@@ -101,7 +101,7 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 	taskTimeout := time.After(mapper.config.TaskTimeout)
 	taskRunning := true
 
-	jobOutput, useJobOutput := s.jobSpec.(JobOutput)
+	jobOutput, useJobOutput := s.job.JobSpec.(JobOutput)
 	if useJobOutput && s.job.Bucket != "" {
 		w, err := s.createOutputFile(c)
 		if err != nil {
@@ -130,7 +130,7 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 	var entity interface{}
 
 	// is full loading implemented?
-	jobEntity, useJobEntity := s.jobSpec.(JobEntity)
+	jobEntity, useJobEntity := s.job.JobSpec.(JobEntity)
 	if useJobEntity {
 		entity = jobEntity.Make()
 	} else {
@@ -166,7 +166,7 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 			}
 
 			// TODO: handle task errors (fail slice?)
-			s.jobSpec.Next(c, s.Counters, key)
+			s.job.JobSpec.Next(c, s.Counters, key)
 			s.Count++
 
 			select {

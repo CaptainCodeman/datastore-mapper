@@ -141,6 +141,7 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("%s-%s", name, requestHash)
 	job := &job{
 		JobName:   name,
+		JobSpec:   jobSpec,
 		Bucket:    bucket,
 		Shards:    shards,
 		Iterating: true,

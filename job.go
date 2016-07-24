@@ -1,6 +1,10 @@
 package mapper
 
 import (
+	"bytes"
+
+	"encoding/gob"
+
 	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
 	"google.golang.org/appengine/datastore"
@@ -13,10 +17,11 @@ type (
 		locker.Lock
 		common
 
-		// TODO: store serialized job spec so it can be used for parameters
-
-		// Job is the job processor name
+		// JobSpec is the job processor name
 		JobName string `datastore:"job_name"`
+
+		// JobSpec is the job processor instance
+		JobSpec JobSpec `datastore:"-"`
 
 		// Bucket defines the cloud storage bucket to write output to
 		// if empty, then no output will be written
@@ -75,6 +80,27 @@ func (j *job) Load(props []datastore.Property) error {
 	datastore.LoadStruct(j, props)
 	j.common.Load(props)
 
+	for _, prop := range props {
+		switch prop.Name {
+		case "job_spec":
+			payload := bytes.NewBuffer(prop.Value.([]byte))
+			enc := gob.NewDecoder(payload)
+			if err := enc.Decode(&j.JobSpec); err != nil {
+				return err
+			}
+		}
+	}
+
+	// jobSpec might be nil if it can't be gob encoded
+	// create instance from name if so
+	if j.JobSpec == nil {
+		jobSpec, err := CreateJobInstance(j.JobName)
+		if err != nil {
+			return err
+		}
+		j.JobSpec = jobSpec
+	}
+
 	return nil
 }
 
@@ -90,6 +116,12 @@ func (j *job) Save() ([]datastore.Property, error) {
 		return nil, err
 	}
 	props = append(props, jprops...)
+
+	payload := new(bytes.Buffer)
+	enc := gob.NewEncoder(payload)
+	if err := enc.Encode(&j.JobSpec); err == nil {
+		props = append(props, datastore.Property{Name: "job_spec", Value: payload.Bytes(), NoIndex: true, Multiple: false})
+	}
 
 	return props, nil
 }

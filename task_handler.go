@@ -77,13 +77,6 @@ func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactor
 			return nil
 		}
 
-		jobSpec, err := CreateJobInstance(j.JobName)
-		if err != nil {
-			log.Errorf(c, "error creating job instance %v", err)
-			return err
-		}
-
-		common.jobSpec = jobSpec
 
 		// call the actual handler
 		if m.config.LogVerbose {

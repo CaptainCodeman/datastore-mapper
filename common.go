@@ -38,7 +38,6 @@ type (
 		// private fields used by local instance
 		id        string
 		job       *job
-		jobSpec   JobSpec
 		startTime time.Time
 	}
 )
