@@ -43,7 +43,13 @@ type (
 
 		// LogVerbose controls verbose logging output
 		LogVerbose bool
+
+		// Host sets the host header on tasks (if set)
+		Host string
 	}
+
+	// Option is the signature for mapper configuration options
+	Option func(*Config) error
 )
 
 // newConfig creates a new config with default values
@@ -62,6 +68,7 @@ func newConfig() *Config {
 		CursorTimeout:   time.Duration(50) * time.Second,
 		Retries:         31,
 		LogVerbose:      false,
+		Host:            "",
 	}
 }
 
@@ -141,4 +148,12 @@ func Retries(retries int) func(*Config) error {
 func LogVerbose(c *Config) error {
 	c.LogVerbose = true
 	return nil
+}
+
+// Host sets the task host header
+func Host(host string) func(*Config) error {
+	return func(c *Config) error {
+		c.Host = host
+		return nil
+	}
 }

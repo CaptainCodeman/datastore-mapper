@@ -40,12 +40,12 @@ func (pr *propertyRange) validate() error {
 
 	// lower must use a lower range operator
 	if pr.lower != nil && (pr.lower.Op != greaterEq && pr.lower.Op != greaterThan) {
-		return fmt.Errorf("invalid lower range op %s", operatorToString[pr.lower.Op])
+		return fmt.Errorf("invalid lower range op %s", pr.lower.Op)
 	}
 
 	// upper must use an upper range operator
 	if pr.upper != nil && (pr.upper.Op != lessEq && pr.upper.Op != lessThan) {
-		return fmt.Errorf("invalid upper range op %s", operatorToString[pr.upper.Op])
+		return fmt.Errorf("invalid upper range op %s", pr.upper.Op)
 	}
 
 	// a single ended range is valid
@@ -138,7 +138,7 @@ func (q *Query) toEqualityListAndRange() ([]filter, *propertyRange, error) {
 		case equal:
 			equality = append(equality, f)
 		default:
-			return nil, nil, fmt.Errorf("unsupported operator %s", operatorToString[f.Op])
+			return nil, nil, fmt.Errorf("unsupported operator %s", f.Op)
 		}
 	}
 

@@ -56,8 +56,8 @@ func (n *namespace) copyFrom(x namespace) {
 }
 
 func (n *namespace) jobID() string {
-	parts := strings.Split(n.id, "-")
-	return parts[0] + "-" + parts[1]
+	parts := strings.Split(n.id, "/")
+	return parts[0] + "/" + parts[1]
 }
 
 func (n *namespace) jobKey(c context.Context, config Config) *datastore.Key {
@@ -65,25 +65,25 @@ func (n *namespace) jobKey(c context.Context, config Config) *datastore.Key {
 }
 
 func (n *namespace) namespaceFilename() string {
-	parts := strings.Split(n.id, "-")
+	parts := strings.Split(n.id, "/")
 	ns := parts[2]
 	if ns == "" {
 		ns = "~"
 	}
 	// mapper type / unique id / namespace
 	// TODO: set filename or at least extension
-	return parts[0] + "-" + parts[1] + "/" + ns + ".json"
+	return parts[0] + "/" + parts[1] + "/" + ns + ".json"
 }
 
 func (n *namespace) shardFilename(shard int) string {
-	parts := strings.Split(n.id, "-")
+	parts := strings.Split(n.id, "/")
 	ns := parts[2]
 	if ns == "" {
 		ns = "~"
 	}
 	// mapper type / unique id / namespace / shard
 	// TODO: set filename or at least extension
-	return parts[0] + "-" + parts[1] + "/" + ns + "/" + strconv.Itoa(shard) + ".json"
+	return parts[0] + "/" + parts[1] + "/" + ns + "/" + strconv.Itoa(shard) + ".json"
 }
 
 func (n *namespace) split(c context.Context, mapper *mapper) error {
@@ -107,7 +107,7 @@ func (n *namespace) split(c context.Context, mapper *mapper) error {
 
 	keys := make([]*datastore.Key, n.ShardsTotal)
 	for i := 0; i < n.ShardsTotal; i++ {
-		id := fmt.Sprintf("%s-%d", n.id, i)
+		id := fmt.Sprintf("%s/%d", n.id, i)
 		key := datastore.NewKey(c, mapper.config.DatastorePrefix+shardKind, id, 0, nil)
 		keys[i] = key
 	}

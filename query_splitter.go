@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"golang.org/x/net/context"
 	"google.golang.org/appengine"
@@ -76,6 +77,9 @@ func (q *Query) split(c context.Context, shards, oversampling int) ([]*Query, er
 		// no property range, shard on key space only
 		log.Debugf(c, "shard on keyspace")
 		propertyRanges, err = q.getScatterSplitPoints(c, shards, oversampling, equality)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		log.Debugf(c, "shard on property range")
 		if pr.lower == nil {
@@ -104,6 +108,7 @@ func (q *Query) split(c context.Context, shards, oversampling int) ([]*Query, er
 	results := []*Query{}
 	for _, pr := range propertyRanges {
 		query := NewQuery(q.kind)
+		query.selection = q.selection
 		query.namespaces = q.namespaces
 		for _, f := range equality {
 			query.filter = append(query.filter, f)
@@ -129,7 +134,7 @@ func (q *Query) getExtremePropertyValue(c context.Context, equality []filter, pr
 	// namespace task)
 	dq := datastore.NewQuery(q.kind)
 	for _, f := range equality {
-		dq = dq.Filter(f.FieldName+" "+operatorToString[f.Op], f.Value)
+		dq = dq.Filter(f.FieldName+" "+f.Op.String(), f.Value)
 	}
 	switch dir {
 	case Ascending:
@@ -178,19 +183,18 @@ func (q *Query) getScatterSplitPoints(c context.Context, shards, oversampling in
 	// first attempt to include equality filters
 	dq := datastore.NewQuery(q.kind)
 	for _, f := range equality {
-		dq = dq.Filter(f.FieldName+" "+operatorToString[f.Op], f.Value)
+		dq = dq.Filter(f.FieldName+" "+f.Op.String(), f.Value)
 	}
 	dq = dq.Order("__scatter__")
 	dq = dq.Limit(limit)
 	dq = dq.KeysOnly()
 
 	randomKeys, err := dq.GetAll(c, nil)
-	if err != nil {
+	if err != nil && !strings.Contains(err.Error(), "datastore_v3: NEED_INDEX") {
 		return nil, err
 	}
 
 	log.Debugf(c, "got %d random keys", len(randomKeys))
-
 	if len(randomKeys) == 0 && len(equality) > 0 {
 		// no keys could be due to a missing index so fallback to just using the scatter
 		// and hope that the distribution of keys is good enough, not idea but 'results'

@@ -63,35 +63,35 @@ func (s *shard) namespaceKey(c context.Context, config Config) *datastore.Key {
 }
 
 func (s *shard) jobID() string {
-	parts := strings.Split(s.id, "-")
-	return parts[0] + "-" + parts[1]
+	parts := strings.Split(s.id, "/")
+	return parts[0] + "/" + parts[1]
 }
 
 func (s *shard) namespaceID() string {
-	parts := strings.Split(s.id, "-")
-	return parts[0] + "-" + parts[1] + "-" + parts[2]
+	parts := strings.Split(s.id, "/")
+	return parts[0] + "/" + parts[1] + "/" + parts[2]
 }
 
 func (s *shard) shardFilename() string {
-	parts := strings.Split(s.id, "-")
+	parts := strings.Split(s.id, "/")
 	ns := parts[2]
 	if ns == "" {
 		ns = "~"
 	}
 	// mapper type / unique id / namespace / shard
 	// TODO: set filename or at least extension
-	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + ".json"
+	return parts[0] + "/" + parts[1] + "/" + ns + "/" + parts[3] + ".json"
 }
 
 func (s *shard) sliceFilename(slice int) string {
-	parts := strings.Split(s.id, "-")
+	parts := strings.Split(s.id, "/")
 	ns := parts[2]
 	if ns == "" {
 		ns = "~"
 	}
 	// mapper type / unique id / namespace / shard / slice
 	// TODO: set filename or at least extension
-	return parts[0] + "-" + parts[1] + "/" + ns + "/" + parts[3] + "/" + strconv.Itoa(slice) + ".json"
+	return parts[0] + "/" + parts[1] + "/" + ns + "/" + parts[3] + "/" + strconv.Itoa(slice) + ".json"
 }
 
 func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
@@ -113,7 +113,7 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 
 	q := datastore.NewQuery(s.Query.kind)
 	for _, f := range s.Query.filter {
-		q = q.Filter(f.FieldName+" "+operatorToString[f.Op], f.Value)
+		q = q.Filter(f.FieldName+" "+f.Op.String(), f.Value)
 	}
 
 	var cursor *datastore.Cursor
@@ -165,8 +165,9 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 				return false, err
 			}
 
-			// TODO: handle task errors (fail slice?)
-			s.job.JobSpec.Next(c, s.Counters, key)
+			if err := s.job.JobSpec.Next(c, s.Counters, key); err != nil {
+				return false, err
+			}
 			s.Count++
 
 			select {

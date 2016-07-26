@@ -44,7 +44,7 @@ func shardFactory() locker.Lockable {
 
 // convert the locker.TaskHandler
 func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactory) http.Handler {
-	fn := func(c context.Context, r *http.Request, key *datastore.Key, entity locker.Lockable) error {
+	h := func(c context.Context, r *http.Request, key *datastore.Key, entity locker.Lockable) error {
 		tentity := entity.(taskEntity)
 		common := tentity.getCommon()
 		common.id = key.StringID()
@@ -77,7 +77,6 @@ func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactor
 			return nil
 		}
 
-
 		// call the actual handler
 		if m.config.LogVerbose {
 			log.Infof(c, "calling handler")
@@ -86,5 +85,9 @@ func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactor
 		return handler(c, *m.config, key, tentity)
 	}
 
-	return http.Handler(m.locker.Handle(fn, factory))
+	fn := func(w http.ResponseWriter, r *http.Request) {
+		m.locker.Handle(h, factory).ServeHTTP(w, r)
+	}
+
+	return http.HandlerFunc(fn)
 }

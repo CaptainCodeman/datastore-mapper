@@ -15,7 +15,7 @@ import (
 
 type (
 	// parse request parameters to create query
-	example3 struct {}
+	example3 struct{}
 )
 
 const (
@@ -57,7 +57,7 @@ func (x *example3) Query(r *http.Request) (*mapper.Query, error) {
 	}
 
 	q := mapper.NewQuery("photo")
-	q = q.Namespace("")
+	q = q.NamespaceEmpty()
 	q = q.Filter("taken >=", from)
 	q = q.Filter("taken <", to)
 

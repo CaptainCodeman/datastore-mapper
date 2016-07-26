@@ -12,6 +12,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
+	"google.golang.org/appengine/log"
 )
 
 type (
@@ -129,7 +130,12 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	bucket := values.Get("bucket")
 
-	query, _ := jobSpec.Query(r)
+	query, err := jobSpec.Query(r)
+	if err != nil {
+		log.Errorf(c, "error creating query %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
 	requestHash := r.Header.Get("X-Appengine-Request-Id-Hash")
 	if requestHash == "" {
@@ -138,7 +144,7 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 		requestHash = strconv.FormatUint(uint64(adler32.Checksum([]byte(requestID))), 16)
 	}
 
-	id := fmt.Sprintf("%s-%s", name, requestHash)
+	id := fmt.Sprintf("%s/%s", name, requestHash)
 	job := &job{
 		JobName:   name,
 		JobSpec:   jobSpec,

@@ -22,7 +22,7 @@ func init() {
 
 func (x *example2) Query(r *http.Request) (*mapper.Query, error) {
 	q := mapper.NewQuery("photo")
-	q = q.Namespace("")
+	q = q.NamespaceEmpty()
 	return q, nil
 }
 

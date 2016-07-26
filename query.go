@@ -15,6 +15,7 @@ type (
 	// with only the mapper supported query features provided and
 	// the addition ability to specify namespaces
 	Query struct {
+		selection  selection
 		namespaces []string
 		kind       string
 		filter     []filter
@@ -29,7 +30,8 @@ type (
 		Value     interface{}
 	}
 
-	operator int
+	operator  int
+	selection int
 )
 
 const (
@@ -40,18 +42,47 @@ const (
 	greaterThan
 )
 
-var (
-	operatorToString = map[operator]string{
-		lessThan:    "<",
-		lessEq:      "<=",
-		equal:       "=",
-		greaterEq:   ">=",
-		greaterThan: ">",
-	}
+const (
+	all selection = iota
+	empty
+	named
+	selected
 )
 
 func init() {
 	gob.Register(&Query{})
+}
+
+func (op operator) String() string {
+	switch op {
+	case lessThan:
+		return "<"
+	case lessEq:
+		return "<="
+	case equal:
+		return "="
+	case greaterEq:
+		return ">="
+	case greaterThan:
+		return ">"
+	default:
+		return "unknown"
+	}
+}
+
+func (s selection) String() string {
+	switch s {
+	case all:
+		return "all"
+	case empty:
+		return "empty"
+	case named:
+		return "named"
+	case selected:
+		return "selected"
+	default:
+		return "unknown"
+	}
 }
 
 // NewQuery created a new Query
@@ -61,16 +92,34 @@ func NewQuery(kind string) *Query {
 	}
 }
 
-// Namespace returns a derivative query with a single namespace
-func (q *Query) Namespace(namespace string) *Query {
+// NamespaceAll returns a derivative query specifying all namespaces
+func (q *Query) NamespaceAll() *Query {
 	q = q.clone()
-	q.namespaces = []string{namespace}
+	q.selection = all
+	q.namespaces = []string{}
 	return q
 }
 
-// Namespaces returns a derivative query with a collection of namespaces
-func (q *Query) Namespaces(namespaces []string) *Query {
+// NamespaceEmpty returns a derivative query specifying the empty namespace
+func (q *Query) NamespaceEmpty() *Query {
 	q = q.clone()
+	q.selection = empty
+	q.namespaces = []string{}
+	return q
+}
+
+// NamespaceNamed returns a derivative query specifying the none-empty namespaces
+func (q *Query) NamespaceNamed() *Query {
+	q = q.clone()
+	q.selection = named
+	q.namespaces = []string{}
+	return q
+}
+
+// Namespace returns a derivative query with a selection of namespaces
+func (q *Query) Namespace(namespaces ...string) *Query {
+	q = q.clone()
+	q.selection = selected
 	q.namespaces = append(q.namespaces, namespaces...)
 	return q
 }
@@ -120,6 +169,7 @@ func (q *Query) Filter(filterStr string, value interface{}) *Query {
 
 func (q *Query) clone() *Query {
 	x := *q
+	x.selection = q.selection
 	// Copy the contents of the slice-typed fields to a new backing store.
 	if len(q.namespaces) > 0 {
 		x.namespaces = make([]string, len(q.namespaces))
@@ -134,7 +184,7 @@ func (q *Query) clone() *Query {
 
 // String returns a string representation of the query for display purposes only
 func (q *Query) String() string {
-	str := fmt.Sprintf("kind:%s namespace(s):%s (%d)", q.kind, strings.Join(q.namespaces, ","), len(q.namespaces))
+	str := fmt.Sprintf("kind:%s namespace(s):%s %s (%d)", q.kind, q.selection, strings.Join(q.namespaces, ","), len(q.namespaces))
 	for _, f := range q.filter {
 		str += fmt.Sprintf(" filter:%s", f.String())
 	}
@@ -142,12 +192,15 @@ func (q *Query) String() string {
 }
 
 func (f *filter) String() string {
-	return fmt.Sprintf("%s %s %v", f.FieldName, operatorToString[f.Op], f.Value)
+	return fmt.Sprintf("%s %s %v", f.FieldName, f.Op, f.Value)
 }
 
 func (q *Query) GobEncode() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
+	if err := enc.Encode(q.selection); err != nil {
+		return nil, err
+	}
 	if err := enc.Encode(q.namespaces); err != nil {
 		return nil, err
 	}
@@ -166,6 +219,9 @@ func (q *Query) GobEncode() ([]byte, error) {
 func (q *Query) GobDecode(b []byte) error {
 	buf := bytes.NewBuffer(b)
 	dec := gob.NewDecoder(buf)
+	if err := dec.Decode(&q.selection); err != nil {
+		return err
+	}
 	if err := dec.Decode(&q.namespaces); err != nil {
 		return err
 	}
@@ -183,11 +239,13 @@ func (q *Query) GobDecode(b []byte) error {
 
 func (q *Query) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
+		Selection  string   `json:"selection"`
 		Namespaces []string `json:"namespaces"`
 		Kind       string   `json:"kind"`
 		Filter     []filter `json:"filter"`
 		KeysOnly   bool     `json:"keys_only"`
 	}{
+		Selection:  q.selection.String(),
 		Namespaces: q.namespaces,
 		Kind:       q.kind,
 		Filter:     q.filter,
@@ -202,7 +260,7 @@ func (f *filter) MarshalJSON() ([]byte, error) {
 		Value interface{} `json:"value"`
 	}{
 		Field: f.FieldName,
-		Op:    operatorToString[f.Op],
+		Op:    f.Op.String(),
 		Value: f.Value,
 	})
 }

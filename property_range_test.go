@@ -59,38 +59,38 @@ func TestPropertyRange(t *testing.T) {
 
 		if pr.empty() {
 			if test.lower != nil {
-				t.Errorf("%d expected lower %s %s %v", i, test.lower.FieldName, operatorToString[test.lower.Op], test.lower.Value)
+				t.Errorf("%d expected lower %s", i, test.lower)
 			}
 			if test.upper != nil {
-				t.Errorf("%d expected upper %s %s %v", i, test.upper.FieldName, operatorToString[test.upper.Op], test.upper.Value)
+				t.Errorf("%d expected upper %s", i, test.upper)
 			}
 		} else {
 			if test.lower == nil {
-				t.Errorf("%d unexpected lower %s %s %v", i, pr.lower.FieldName, operatorToString[pr.lower.Op], pr.lower.Value)
+				t.Errorf("%d unexpected lower %s", i, pr.lower)
 			} else {
 				exp := test.lower
 				got := pr.lower
 				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
-					t.Errorf("%d expected lower %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
+					t.Errorf("%d expected lower %s, got %s", i, exp, got)
 				}
 				exp = test.upper
 				got = pr.upper
 				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
-					t.Errorf("%d expected upper %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
+					t.Errorf("%d expected upper %s, got %s", i, exp, got)
 				}
 			}
 			if test.upper == nil {
-				t.Errorf("%d unexpected upper %s %s %v", i, pr.upper.FieldName, operatorToString[pr.upper.Op], pr.upper.Value)
+				t.Errorf("%d unexpected upper %s", i, pr.upper)
 			} else {
 				exp := test.lower
 				got := pr.lower
 				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
-					t.Errorf("%d expected lower %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
+					t.Errorf("%d expected lower %s, got %s", i, exp, got)
 				}
 				exp = test.upper
 				got = pr.upper
 				if got.FieldName != exp.FieldName || got.Op != exp.Op || got.Value != exp.Value {
-					t.Errorf("%d expected upper %s %s %v, got %s %s %v", i, exp.FieldName, operatorToString[exp.Op], exp.Value, got.FieldName, operatorToString[got.Op], got.Value)
+					t.Errorf("%d expected upper %s, got %s", i, exp, got)
 				}
 			}
 		}
@@ -102,10 +102,10 @@ func TestPropertyRange(t *testing.T) {
 		if len(equal) != len(test.equal) {
 			t.Errorf("%d expected %d equal, got %d", i, len(test.equal), len(equal))
 			for j, f := range test.equal {
-				t.Errorf("%d.%d expected %s %s %v", i, j, f.FieldName, operatorToString[f.Op], f.Value)
+				t.Errorf("%d.%d expected %s", i, j, f)
 			}
 			for j, f := range equal {
-				t.Errorf("%d.%d result %s %s %v", i, j, f.FieldName, operatorToString[f.Op], f.Value)
+				t.Errorf("%d.%d result %s", i, j, f)
 			}
 			continue
 		}
@@ -114,7 +114,7 @@ func TestPropertyRange(t *testing.T) {
 		for j, f := range equal {
 			exp := test.equal[j]
 			if f.FieldName != exp.FieldName || f.Op != exp.Op || f.Value != exp.Value {
-				t.Errorf("%d.%d expected %s %s %v, got %s %s %v", i, j, exp.FieldName, operatorToString[exp.Op], exp.Value, f.FieldName, operatorToString[f.Op], f.Value)
+				t.Errorf("%d.%d expected %s, got %s", i, j, exp, f)
 			}
 		}
 	}

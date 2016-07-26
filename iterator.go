@@ -17,8 +17,8 @@ type (
 		locker.Lock
 		common
 
-		// Namespace is the namespace to begin iterating from
-		Namespace string `datastore:"namespace,noindex"`
+		// Cursor is the datastore cursor to start from
+		Cursor string `datastore:"cursor,noindex"`
 	}
 )
 
@@ -33,7 +33,7 @@ func (it *iterator) setJob(job *job) {
 func (it *iterator) copyFrom(x iterator) {
 	it.Lock = x.Lock
 	it.common = x.common
-	it.Namespace = x.Namespace
+	it.Cursor = x.Cursor
 }
 
 func (it *iterator) jobKey(c context.Context, config Config) *datastore.Key {
@@ -44,28 +44,36 @@ func (it *iterator) jobID() string {
 	return it.id
 }
 
-func (it *iterator) process(c context.Context, mapper *mapper) error {
-	// process the current namespace - split the query and create shards
-	log.Debugf(c, "process %s", it.Namespace)
+func (it *iterator) process(c context.Context, mapper *mapper, namespaceStr string) error {
+	// process the namespace - split the query and create shards
+	log.Debugf(c, "process %s", namespaceStr)
 
 	it.Count++
 
-	id := fmt.Sprintf("%s-%s", it.id, it.Namespace)
+	id := fmt.Sprintf("%s/%s", it.id, namespaceStr)
 	key := datastore.NewKey(c, mapper.config.DatastorePrefix+namespaceKind, id, 0, nil)
 
-	q := it.Query.Namespace(it.Namespace)
+	q := it.Query.Namespace(namespaceStr)
 
 	ns := new(namespace)
 	ns.start(q)
-	ns.Namespace = it.Namespace
+	ns.Namespace = namespaceStr
+
+	// TODO: what if *this* task is restarted - ns tasks
+	// would be re-created and could alreadt be executing
 
 	return mapper.locker.Schedule(c, key, ns, mapper.config.Path+namespaceURL, nil)
 }
 
 func (it *iterator) createQuery(c context.Context) *datastore.Query {
 	q := datastore.NewQuery("__namespace__")
-	if it.Namespace != "" {
-		q = q.Filter("__key__ >=", datastore.NewKey(c, "__namespace__", it.Namespace, 0, nil))
+	switch it.Query.selection {
+	case all:
+	// no filter
+	case empty:
+		q = q.Filter("__key__ =", datastore.NewKey(c, "__namespace__", "", 1, nil))
+	case named:
+		q = q.Filter("__key__ >", datastore.NewKey(c, "__namespace__", "", 1, nil))
 	}
 	q = q.Order("__key__")
 	q = q.KeysOnly()
@@ -73,65 +81,94 @@ func (it *iterator) createQuery(c context.Context) *datastore.Query {
 }
 
 func (it *iterator) iterate(c context.Context, mapper *mapper) (bool, error) {
-	// use the full 10 minutes allowed (assuming front-end instance type)
-	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
+	taskTimeout := time.After(mapper.config.TaskTimeout)
+	taskRunning := true
 
-	// if the query defines the specific namespaces to process then we
-	// don't really need to query for them - we can just process that
-	// list immediately
-	if len(it.Query.namespaces) > 0 {
+	// if the query defines the specific namespaces to process
+	// then we can just process that list directly
+	if it.Query.selection == selected {
 		for _, namespace := range it.Query.namespaces {
-			it.Namespace = namespace
-			it.process(c, mapper)
+			it.process(c, mapper, namespace)
 		}
 		return true, nil
 	}
 
-	// we query and proecess in batches of 'size' and also create a
-	// timeout signal that is checked after each batch. So, a batch has
-	// to take less than 5 minutes to execute
-	size := 50
-	timeout := make(chan bool, 1)
-	timer := time.AfterFunc(time.Duration(5)*time.Minute, func() {
-		timeout <- true
-	})
-	defer timer.Stop()
+	q := it.createQuery(c)
 
-	for {
-		count := 0
-		q := it.createQuery(c).Limit(size)
-		t := q.Run(c)
+	var cursor *datastore.Cursor
+	if it.Cursor != "" {
+		newCursor, err := datastore.DecodeCursor(it.Cursor)
+		if err != nil {
+			log.Errorf(c, "get start cursor error %s", err.Error())
+			return false, err
+		}
+		cursor = &newCursor
+	}
+
+	// main task loop to repeat datastore query with cursor
+	for taskRunning {
+
+		// if cursor is set, start the query at that point
+		if cursor != nil {
+			q = q.Start(*cursor)
+		}
+
+		// limit how long the cursor can run before we requery
+		cursorTimeout := time.After(mapper.config.CursorTimeout)
+		// datastore cursor context needs to run for the max allowed
+		cc, _ := context.WithTimeout(c, time.Duration(60)*time.Second)
+		t := q.Run(cc)
+
+		// item loop to iterate cursor
+	cursorLoop:
 		for {
 			key, err := t.Next(nil)
 			if err == datastore.Done {
-				break
+				// we reached the end
+				return true, nil
 			}
+
 			if err != nil {
 				log.Errorf(c, "error %s", err.Error())
 				return false, err
 			}
 
-			it.Namespace = key.StringID()
-			if err := it.process(c, mapper); err != nil {
+			namespace := key.StringID()
+			if err := it.process(c, mapper, namespace); err != nil {
 				return false, err
 			}
-			count++
+			it.Count++
+
+			select {
+			case <-taskTimeout:
+				// clearing the flag breaks us out of the task loop but also lets us update the
+				// cursor first when we break from the inner cursorLoop
+				taskRunning = false
+				break cursorLoop
+			default:
+				select {
+				case <-cursorTimeout:
+					// this forces a new cursor and query so we don't suffer from datastore timeouts
+					break cursorLoop
+				default:
+					// no timeout so carry on with the current cursor
+					continue cursorLoop
+				}
+			}
 		}
 
-		// did we process a full batch? if not, we hit the end of the dataset
-		if count < size {
-			return true, nil
+		// we need to get the cursor for where we are upto whether we are requerying
+		// within this task or scheduling a new continuation slice
+		newCursor, err := t.Cursor()
+		if err != nil {
+			log.Errorf(c, "get next cursor error %s", err.Error())
+			return false, err
 		}
-
-		// check if we've timed out
-		select {
-		case <-timeout:
-			// timeout without completing
-			return false, nil
-		default:
-			// continue processing in thsi request
-		}
+		cursor = &newCursor
+		it.Cursor = cursor.String()
 	}
+
+	return false, nil
 }
 
 func (it *iterator) completed(c context.Context, mapper *mapper, key *datastore.Key) error {
@@ -163,7 +200,7 @@ func (it *iterator) completed(c context.Context, mapper *mapper, key *datastore.
 
 		job.NamespacesTotal += int(it.Count)
 		job.Iterating = false
-		
+
 		// only the iterator walltime is rolled up into the job counts
 		job.WallTime += it.WallTime
 

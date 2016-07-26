@@ -33,7 +33,7 @@ var (
 // NewServer configures the server and returns the handler for mounting
 // within the app so it can control the endpoint to use. The server is
 // actually already created but we need to know what the path prefix is.
-func NewServer(path string, options ...func(*Config) error) (http.Handler, error) {
+func NewServer(path string, options ...Option) (http.Handler, error) {
 	server.config.Path = strings.TrimSuffix(path, "/")
 	for _, option := range options {
 		if err := option(server.config); err != nil {
@@ -43,13 +43,18 @@ func NewServer(path string, options ...func(*Config) error) (http.Handler, error
 	handler := http.StripPrefix(server.config.Path, server)
 
 	// pass on locker options
-	var err error
-	server.locker, err = locker.NewLocker(
+	lockerOptions := []locker.Option{
 		locker.LeaseDuration(server.config.LeaseDuration),
 		locker.LeaseTimeout(server.config.LeaseTimeout),
 		locker.DefaultQueue(server.config.DefaultQueue),
 		locker.MaxRetries(server.config.Retries),
-	)
+		locker.Host(server.config.Host),
+	}
+	if server.config.LogVerbose {
+		lockerOptions = append(lockerOptions, locker.LogVerbose)
+	}
+	var err error
+	server.locker, err = locker.NewLocker(lockerOptions...)
 	if err != nil {
 		return nil, err
 	}
