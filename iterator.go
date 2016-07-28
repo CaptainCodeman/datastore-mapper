@@ -137,7 +137,6 @@ func (it *iterator) iterate(c context.Context, mapper *mapper) (bool, error) {
 			if err := it.process(c, mapper, namespace); err != nil {
 				return false, err
 			}
-			it.Count++
 
 			select {
 			case <-taskTimeout:
