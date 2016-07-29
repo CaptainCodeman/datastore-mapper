@@ -281,8 +281,8 @@ func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
 
 // rollup shard slices into single file
 func (s *shard) rollup(c context.Context) error {
-	// nothing to do if no output writing or no output written
-	if s.job.Bucket == "" || s.Count == 0 {
+	// nothing to do if no output writing
+	if s.job.Bucket == "" {
 		return nil
 	}
 
