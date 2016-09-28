@@ -255,6 +255,12 @@ func (n *namespace) rollup(c context.Context) error {
 	// TODO: logic to handle more than 32 composable files
 
 	namespaceFilename := n.namespaceFilename()
+
+	if _, err := service.Objects.Get(n.job.Bucket, namespaceFilename).Context(c).Do(); err == nil {
+		log.Warningf(c, "namespace file already exists %s", namespaceFilename)
+		return nil
+	}
+
 	log.Debugf(c, "compose %s", namespaceFilename)
 	req := &apistorage.ComposeRequest{
 		Destination:   &apistorage.Object{Name: namespaceFilename},

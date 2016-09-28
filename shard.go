@@ -8,17 +8,17 @@ import (
 
 	"io/ioutil"
 
+	cstorage "cloud.google.com/go/storage"
 	"github.com/captaincodeman/datastore-locker"
 	"golang.org/x/net/context"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
 	apistorage "google.golang.org/api/storage/v1"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/taskqueue"
-	"google.golang.org/cloud"
-	cstorage "google.golang.org/cloud/storage"
 )
 
 type (
@@ -160,12 +160,20 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 				return true, nil
 			}
 
+			// TODO: option to fail or continue on individual errors
+			// or add error handling logic to job to give it a chance (?)
 			if err != nil {
-				log.Errorf(c, "error %s", err.Error())
-				return false, err
+				log.Errorf(c, "key %v error %v", key, err)
+				// return false, err
+				continue cursorLoop
 			}
 
 			if err := s.job.JobSpec.Next(c, s.Counters, key); err != nil {
+				// TODO: instead of failing the entire slice, try to figure
+				// out if it's possible to continue from this point or maybe
+				// the last cursor position to avoid re-processing entities.
+				// NOTE: this would need to truncate any output file being
+				// written so entries weren't doubled up but maybe possible.
 				return false, err
 			}
 			s.Count++
@@ -245,6 +253,7 @@ func (s *shard) completed(c context.Context, mapper *mapper, key *datastore.Key)
 }
 
 func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
+	c, _ = context.WithTimeout(c, time.Duration(10)*time.Minute)
 	// for development we can't use the appengine default credentials so
 	// instead need to create our own oauth token source to access storage
 
@@ -261,7 +270,7 @@ func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
 		if err != nil {
 			return nil, err
 		}
-		client, err = cstorage.NewClient(c, cloud.WithTokenSource(conf.TokenSource(c)))
+		client, err = cstorage.NewClient(c, option.WithTokenSource(conf.TokenSource(c)))
 		if err != nil {
 			return nil, err
 		}
@@ -316,6 +325,12 @@ func (s *shard) rollup(c context.Context) error {
 	// TODO: logic to handle more than 32 composable files
 
 	shardFilename := s.shardFilename()
+
+	if _, err := service.Objects.Get(s.job.Bucket, shardFilename).Context(c).Do(); err == nil {
+		log.Warningf(c, "shard file already exists %s", shardFilename)
+		return nil
+	}
+
 	log.Debugf(c, "compose %s", shardFilename)
 	req := &apistorage.ComposeRequest{
 		Destination:   &apistorage.Object{Name: shardFilename},
