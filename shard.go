@@ -266,7 +266,7 @@ func (s *shard) createOutputFile(c context.Context) (io.WriteCloser, error) {
 		if err != nil {
 			return nil, err
 		}
-		conf, err := google.JWTConfigFromJSON(jsonKey, cstorage.ScopeFullControl)
+		conf, err := google.JWTConfigFromJSON(jsonKey, cstorage.ScopeReadWrite)
 		if err != nil {
 			return nil, err
 		}
