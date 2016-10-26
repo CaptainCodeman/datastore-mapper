@@ -104,10 +104,6 @@ func init() {
 // scheduled to run as a task which performs splitting of the input reader based
 // on the number of shards.
 func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		return
-	}
-
 	c := appengine.NewContext(r)
 
 	values := r.URL.Query()
