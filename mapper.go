@@ -25,7 +25,7 @@ type (
 
 var (
 	// there can only be one instance and we need it created before init
-	// so that we can attach out handlers to it. Their paths are relative
+	// so that we can attach our handlers to it. Their paths are relative
 	// so it's OK that we don't yet know the prefix it will be mounted at.
 	server = newMapper()
 )

@@ -35,7 +35,7 @@ type (
 		TaskTimeout time.Duration
 
 		// CursorTimeout is the time to use a cursor for before requerying
-		// The default limit is 60 seconds
+		// The default limit is 50 seconds
 		CursorTimeout time.Duration
 
 		// Retries is the maximum number of times to retry a failing task
