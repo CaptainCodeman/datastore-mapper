@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -127,12 +128,17 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 	}
 
 	// what we'll load into if doing full entity loads (i.e. not doing KeysOnly)
-	var entity interface{}
+	var (
+		entity                 interface{}
+		entityElem, entityZero reflect.Value
+	)
 
 	// is full loading implemented?
 	jobEntity, useJobEntity := s.job.JobSpec.(JobEntity)
 	if useJobEntity {
 		entity = jobEntity.Make()
+		entityElem = reflect.ValueOf(entity).Elem()
+		entityZero = reflect.Zero(entityElem.Type())
 	} else {
 		q = q.KeysOnly()
 	}
@@ -154,6 +160,11 @@ func (s *shard) iterate(c context.Context, mapper *mapper) (bool, error) {
 		// item loop to iterate cursor
 	cursorLoop:
 		for {
+			// reset entity to zero, otherwise struct slices leak data between loads
+			if useJobEntity {
+				entityElem.Set(entityZero)
+			}
+
 			key, err := it.Next(entity)
 			if err == datastore.Done {
 				// we reached the end
