@@ -68,7 +68,7 @@ func (j *job) completed(c context.Context, mapper *mapper, key *datastore.Key) e
 	j.Lock.Complete()
 
 	// everything is complete when this runs, so no need for a transaction
-	if _, err := storage.Put(c, key, j); err != nil {
+	if _, err := datastore.Put(c, key, j); err != nil {
 		return err
 	}
 

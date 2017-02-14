@@ -62,7 +62,7 @@ func (m *mapper) handlerAdapter(handler taskHandler, factory locker.EntityFactor
 			}
 			key := datastore.NewKey(c, m.config.DatastorePrefix+jobKind, jobID, 0, nil)
 			j = new(job)
-			if err := storage.Get(c, key, j); err != nil {
+			if err := datastore.Get(c, key, j); err != nil {
 				// we need the job so error if we couldn't load it
 				return err
 			}

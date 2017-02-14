@@ -183,10 +183,10 @@ func (it *iterator) completed(c context.Context, mapper *mapper, key *datastore.
 	jobKey := it.jobKey(c, *mapper.config)
 	job := new(job)
 
-	return storage.RunInTransaction(c, func(tc context.Context) error {
+	return datastore.RunInTransaction(c, func(tc context.Context) error {
 		keys := []*datastore.Key{key, jobKey}
 		vals := []interface{}{fresh, job}
-		if err := storage.GetMulti(tc, keys, vals); err != nil {
+		if err := datastore.GetMulti(tc, keys, vals); err != nil {
 			return err
 		}
 
@@ -212,7 +212,7 @@ func (it *iterator) completed(c context.Context, mapper *mapper, key *datastore.
 			}
 		}
 
-		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+		if _, err := datastore.PutMulti(tc, keys, vals); err != nil {
 			return err
 		}
 		return nil

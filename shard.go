@@ -234,10 +234,10 @@ func (s *shard) completed(c context.Context, mapper *mapper, key *datastore.Key)
 	nsKey := s.namespaceKey(c, *mapper.config)
 	ns := new(namespace)
 
-	return storage.RunInTransaction(c, func(tc context.Context) error {
+	return datastore.RunInTransaction(c, func(tc context.Context) error {
 		keys := []*datastore.Key{key, nsKey}
 		vals := []interface{}{fresh, ns}
-		if err := storage.GetMulti(tc, keys, vals); err != nil {
+		if err := datastore.GetMulti(tc, keys, vals); err != nil {
 			return err
 		}
 
@@ -255,7 +255,7 @@ func (s *shard) completed(c context.Context, mapper *mapper, key *datastore.Key)
 			}
 		}
 
-		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+		if _, err := datastore.PutMulti(tc, keys, vals); err != nil {
 			return err
 		}
 

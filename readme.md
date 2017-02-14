@@ -38,15 +38,6 @@ The default configuration can be overridden by passing additional options, for e
 
 See the `/config.go` file for all configuration options.
 
-The mapper will use memcache for datastore operations using [nds](https://github.com/qedus/nds)
-but this can be controlled by calling either of:
-
-    mapper.UseDatastore()
-
-Or, to use memcache again:
-
-    mapper.UseMemcached()
-
 ## Mapper Jobs
 Mapper Jobs are defined by creating a Go struct that implements the `JobSpec` interface and
 registering it with the mapper:

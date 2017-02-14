@@ -113,7 +113,7 @@ func (n *namespace) split(c context.Context, mapper *mapper) error {
 	}
 
 	shards := make([]*shard, n.ShardsTotal)
-	if err := storage.GetMulti(c, keys, shards); err != nil {
+	if err := datastore.GetMulti(c, keys, shards); err != nil {
 		if me, ok := err.(appengine.MultiError); ok {
 			for i, merr := range me {
 				if merr == datastore.ErrNoSuchEntity {
@@ -149,9 +149,9 @@ func (n *namespace) update(c context.Context, mapper *mapper, key *datastore.Key
 	}
 
 	// update namespace status within a transaction
-	return storage.RunInTransaction(c, func(tc context.Context) error {
+	return datastore.RunInTransaction(c, func(tc context.Context) error {
 		fresh := new(namespace)
-		if err := storage.Get(tc, key, fresh); err != nil {
+		if err := datastore.Get(tc, key, fresh); err != nil {
 			return err
 		}
 
@@ -167,7 +167,7 @@ func (n *namespace) update(c context.Context, mapper *mapper, key *datastore.Key
 			}
 		}
 
-		if _, err := storage.Put(tc, key, fresh); err != nil {
+		if _, err := datastore.Put(tc, key, fresh); err != nil {
 			return err
 		}
 
@@ -187,10 +187,10 @@ func (n *namespace) completed(c context.Context, mapper *mapper, key *datastore.
 	jobKey := n.jobKey(c, *mapper.config)
 	job := new(job)
 
-	return storage.RunInTransaction(c, func(tc context.Context) error {
+	return datastore.RunInTransaction(c, func(tc context.Context) error {
 		keys := []*datastore.Key{key, jobKey}
 		vals := []interface{}{fresh, job}
-		if err := storage.GetMulti(tc, keys, vals); err != nil {
+		if err := datastore.GetMulti(tc, keys, vals); err != nil {
 			return err
 		}
 
@@ -211,7 +211,7 @@ func (n *namespace) completed(c context.Context, mapper *mapper, key *datastore.
 			}
 		}
 
-		if _, err := storage.PutMulti(tc, keys, vals); err != nil {
+		if _, err := datastore.PutMulti(tc, keys, vals); err != nil {
 			return err
 		}
 		return nil
