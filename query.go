@@ -8,6 +8,8 @@ import (
 
 	"encoding/gob"
 	"encoding/json"
+
+	"google.golang.org/appengine/datastore"
 )
 
 type (
@@ -50,6 +52,7 @@ const (
 )
 
 func init() {
+	gob.Register(&datastore.Key{})
 	gob.Register(&Query{})
 }
 
