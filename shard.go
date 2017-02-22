@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"fmt"
 	"io"
 	"reflect"
 	"strconv"
@@ -331,39 +332,76 @@ func (s *shard) rollup(c context.Context) error {
 		}
 	}
 
-	// TODO: if only 1 slice, copy / move file instead
-	// TODO: check if shard file already exists and skip compose
-	// TODO: logic to handle more than 32 composable files
-
-	shardFilename := s.shardFilename()
-
-	if _, err := service.Objects.Get(s.job.Bucket, shardFilename).Context(c).Do(); err == nil {
-		log.Warningf(c, "shard file already exists %s", shardFilename)
-		return nil
-	}
-
-	log.Debugf(c, "compose %s", shardFilename)
-	req := &apistorage.ComposeRequest{
-		Destination:   &apistorage.Object{Name: shardFilename},
-		SourceObjects: make([]*apistorage.ComposeRequestSourceObjects, s.Sequence-1),
-	}
+	target := s.shardFilename()
+	sources := make([]string, s.Sequence-1)
 	for i := 1; i < s.Sequence; i++ {
-		sliceFilename := s.sliceFilename(i)
-		log.Debugf(c, "source %s", sliceFilename)
-		req.SourceObjects[i-1] = &apistorage.ComposeRequestSourceObjects{Name: sliceFilename}
+		sources[i-1] = s.sliceFilename(i)
 	}
 
-	res, err := service.Objects.Compose(s.job.Bucket, shardFilename, req).Context(c).Do()
-	if err != nil {
-		return err
-	}
-	log.Debugf(c, "created shard file %s gen %d %d bytes", res.Name, res.Generation, res.Size)
+	return s.combineFiles(c, service, target, sources)
+}
 
-	// delete slice files
-	for i := 1; i < s.Sequence; i++ {
-		log.Debugf(c, "delete %s", s.sliceFilename(i))
-		service.Objects.Delete(s.job.Bucket, s.sliceFilename(i)).Context(c).Do()
-		// do we care about errors? provide separate cleanup option
+// TODO: reuse logic from namespace to avoid duplication
+func (s *shard) combineFiles(c context.Context, service *apistorage.Service, target string, sources []string) error {
+	if _, err := service.Objects.Get(s.job.Bucket, target).Context(c).Do(); err != nil {
+
+		count := len(sources)
+
+		switch {
+
+		case count == 1:
+			// copy single file
+			_, err := service.Objects.Copy(s.job.Bucket, sources[0], s.job.Bucket, target, nil).Context(c).Do()
+			return err
+
+		case count <= 32:
+			// combine source files to target
+			log.Debugf(c, "compose %s from %d sources", target, count)
+			req := &apistorage.ComposeRequest{
+				Destination:   &apistorage.Object{Name: target},
+				SourceObjects: make([]*apistorage.ComposeRequestSourceObjects, count),
+			}
+			for i := 0; i < count; i++ {
+				log.Debugf(c, "source %d %s", i, sources[i])
+				req.SourceObjects[i] = &apistorage.ComposeRequestSourceObjects{Name: sources[i]}
+			}
+
+			res, err := service.Objects.Compose(s.job.Bucket, target, req).Context(c).Do()
+			if err != nil {
+				return err
+			}
+			log.Debugf(c, "created file %s gen %d %d bytes", res.Name, res.Generation, res.Size)
+
+		case count > 32:
+			// rollup to intermediate files
+			steps := ((count - 1) / 32) + 1
+			targets := make([]string, steps)
+			for i := 0; i < steps; i++ {
+				targets[i] = fmt.Sprintf("%s-%d", target, i)
+
+				start := i * 32
+				stop := i*32 + 32
+				if stop > count {
+					stop = count
+				}
+				if err := s.combineFiles(c, service, targets[i], sources[start:stop]); err != nil {
+					return err
+				}
+			}
+
+			if err := s.combineFiles(c, service, target, targets); err != nil {
+				return err
+			}
+		}
+
+		// delete source files
+		for i := 0; i < count; i++ {
+			log.Debugf(c, "delete %s", sources[i])
+			if err := service.Objects.Delete(s.job.Bucket, sources[i]).Context(c).Do(); err != nil {
+				// TODO: check for 404 error and ignore but return err for failures (to ensure cleanup)
+				return nil
+			}
+		}
 	}
 
 	return nil
