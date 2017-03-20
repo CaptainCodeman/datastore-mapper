@@ -22,7 +22,7 @@ type (
 	// namespace processes a single namespace for a job
 	namespace struct {
 		locker.Lock
-		common
+		common `datastore:"-"`
 
 		// Namespace is the namespace to process
 		Namespace string `datastore:"namespace,noindex"`

@@ -110,6 +110,8 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 	name := values.Get("name")
 	jobSpec, err := CreateJobInstance(name)
 	if err != nil {
+		log.Errorf(c, "failed to create job %s %v", name, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -128,8 +130,8 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	query, err := jobSpec.Query(r)
 	if err != nil {
-		log.Errorf(c, "error creating query %v", err)
-		w.WriteHeader(http.StatusBadRequest)
+		log.Errorf(c, "failed to create query %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -151,5 +153,12 @@ func (m *mapper) startJobHandler(w http.ResponseWriter, r *http.Request) {
 	job.common.start(query)
 
 	key := datastore.NewKey(c, m.config.DatastorePrefix+jobKind, id, 0, nil)
-	m.locker.Schedule(c, key, job, m.config.Path+jobURL, nil)
+	if err := m.locker.Schedule(c, key, job, m.config.Path+jobURL, nil); err != nil {
+		log.Errorf(c, "error scheduling job %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Debugf(c, "scheduled job %s queue:%s bucket:%s shards:%d", id, queue, bucket, shards)
+	w.WriteHeader(http.StatusAccepted)
 }

@@ -15,7 +15,7 @@ type (
 	// iterator processes namespaces for a job
 	iterator struct {
 		locker.Lock
-		common
+		common `datastore:"-"`
 
 		// Cursor is the datastore cursor to start from
 		Cursor string `datastore:"cursor,noindex"`

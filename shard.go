@@ -27,7 +27,7 @@ type (
 	// shard processes shards for a job (slices of a namespace)
 	shard struct {
 		locker.Lock
-		common
+		common `datastore:"-"`
 
 		// Namespace is the namespace for this shard
 		Namespace string `datastore:"namespace,noindex"`

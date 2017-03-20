@@ -15,7 +15,7 @@ type (
 	// job is the datastore struct to control execution of a job instance
 	job struct {
 		locker.Lock
-		common
+		common `datastore:"-"`
 
 		// JobSpec is the job processor name
 		JobName string `datastore:"job_name"`
